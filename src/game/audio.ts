@@ -1,0 +1,443 @@
+/**
+ * Procedural Generative Zen Audio Engine using Web Audio API.
+ * High-immersion, zero-dependency procedural synthesis for minimalist geometric aesthetics.
+ * Inspired by Monument Valley, Rez, and Osmos: interactive pentatonic chimes,
+ * binaural harmonic drones, and resonant frequency sweeps.
+ */
+
+class SoundEngine {
+  private ctx: AudioContext | null = null;
+  private masterGain: GainNode | null = null;
+  private musicGain: GainNode | null = null;
+  private sfxGain: GainNode | null = null;
+  private isMuted: boolean = false;
+  private isMusicEnabled: boolean = true;
+  private droneOscillators: { osc: OscillatorNode; gain: GainNode }[] = [];
+  private isDronePlaying: boolean = false;
+
+  // Pentatonic scale frequencies for melodic generative collisions (Eb Minor Pentatonic: Eb, Gb, Ab, Bb, Db)
+  private pentatonicScale = [
+    155.56, 185.00, 207.65, 233.08, 277.18, // Octave 3
+    311.13, 369.99, 415.30, 466.16, 554.37, // Octave 4
+    622.25, 739.99, 830.61, 932.33, 1108.73 // Octave 5
+  ];
+  private lastNoteTime: number = 0;
+
+  constructor() {
+    // Initialized on first user gesture
+  }
+
+  private initContext() {
+    if (this.ctx) {
+      if (this.ctx.state === 'suspended') {
+        this.ctx.resume();
+      }
+      return;
+    }
+
+    try {
+      const AudioCtx = window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
+      this.ctx = new AudioCtx();
+
+      this.masterGain = this.ctx.createGain();
+      this.masterGain.gain.setValueAtTime(this.isMuted ? 0 : 0.75, this.ctx.currentTime);
+      this.masterGain.connect(this.ctx.destination);
+
+      this.sfxGain = this.ctx.createGain();
+      this.sfxGain.gain.setValueAtTime(0.85, this.ctx.currentTime);
+      this.sfxGain.connect(this.masterGain);
+
+      this.musicGain = this.ctx.createGain();
+      this.musicGain.gain.setValueAtTime(this.isMusicEnabled ? 0.3 : 0, this.ctx.currentTime);
+      this.musicGain.connect(this.masterGain);
+
+      if (this.isMusicEnabled) {
+        this.startDrone();
+      }
+    } catch {
+      // Audio not supported in this environment
+    }
+  }
+
+  public unlock() {
+    this.initContext();
+  }
+
+  public setMuted(muted: boolean) {
+    this.isMuted = muted;
+    if (this.masterGain && this.ctx) {
+      this.masterGain.gain.setTargetAtTime(muted ? 0 : 0.75, this.ctx.currentTime, 0.05);
+    }
+  }
+
+  public setMusicEnabled(enabled: boolean) {
+    this.isMusicEnabled = enabled;
+    if (this.musicGain && this.ctx) {
+      this.musicGain.gain.setTargetAtTime(enabled ? 0.3 : 0, this.ctx.currentTime, 0.1);
+    }
+    if (enabled && !this.isDronePlaying) {
+      this.startDrone();
+    }
+  }
+
+  public getMuted(): boolean {
+    return this.isMuted;
+  }
+
+  public getMusicEnabled(): boolean {
+    return this.isMusicEnabled;
+  }
+
+  /**
+   * Generative ambient harmonic drone (Eb ethereal pad with subtle breathing LFO)
+   */
+  private startDrone() {
+    if (!this.ctx || !this.musicGain || this.isDronePlaying) return;
+    this.isDronePlaying = true;
+
+    // Eb minor ambient chord layers: Eb2 (77.78), Bb2 (116.54), Gb3 (185.00), Db4 (277.18), F4 (349.23)
+    const baseFreqs = [77.78, 116.54, 185.00, 277.18, 349.23];
+
+    baseFreqs.forEach((freq, idx) => {
+      if (!this.ctx || !this.musicGain) return;
+      const osc = this.ctx.createOscillator();
+      const gain = this.ctx.createGain();
+      const filter = this.ctx.createBiquadFilter();
+
+      osc.type = idx === 0 ? 'sine' : idx % 2 === 0 ? 'triangle' : 'sine';
+      osc.frequency.setValueAtTime(freq, this.ctx.currentTime);
+
+      // Subtle slow frequency modulation (chorus/drift)
+      const lfo = this.ctx.createOscillator();
+      const lfoGain = this.ctx.createGain();
+      lfo.frequency.setValueAtTime(0.08 + idx * 0.03, this.ctx.currentTime);
+      lfoGain.gain.setValueAtTime(1.8, this.ctx.currentTime);
+      lfo.connect(osc.frequency);
+      lfo.start();
+
+      filter.type = 'lowpass';
+      filter.frequency.setValueAtTime(320 + idx * 70, this.ctx.currentTime);
+
+      // Soft envelope
+      const baseVol = idx === 0 ? 0.08 : 0.04 / (idx + 0.5);
+      gain.gain.setValueAtTime(baseVol, this.ctx.currentTime);
+
+      osc.connect(filter);
+      filter.connect(gain);
+      gain.connect(this.musicGain);
+
+      osc.start();
+      this.droneOscillators.push({ osc, gain });
+    });
+  }
+
+  /**
+   * Melodic Pentatonic Impact: Plays an organic crystal glass/marimba tone
+   * mapped to harmonic musical notes based on impact velocity.
+   */
+  public playImpact(speed: number) {
+    if (this.isMuted) return;
+    this.initContext();
+    if (!this.ctx || !this.sfxGain) return;
+
+    const now = this.ctx.currentTime;
+    // Throttle micro impacts to avoid frequency clutter
+    if (now - this.lastNoteTime < 0.06) return;
+    this.lastNoteTime = now;
+
+    const clampedSpeed = Math.min(Math.max(speed, 25), 450);
+    const normalized = (clampedSpeed - 25) / 425;
+    if (normalized < 0.04) return;
+
+    // Pick a pentatonic note based on impact strength
+    const noteIdx = Math.min(
+      Math.floor(normalized * this.pentatonicScale.length),
+      this.pentatonicScale.length - 1
+    );
+    const freq = this.pentatonicScale[noteIdx];
+
+    const osc = this.ctx.createOscillator();
+    const gain = this.ctx.createGain();
+    const filter = this.ctx.createBiquadFilter();
+
+    osc.type = 'sine';
+    osc.frequency.setValueAtTime(freq, now);
+    osc.frequency.exponentialRampToValueAtTime(freq * 0.98, now + 0.2);
+
+    filter.type = 'lowpass';
+    filter.frequency.setValueAtTime(freq * 2.5, now);
+
+    const volume = Math.min(0.06 + normalized * 0.22, 0.28);
+    gain.gain.setValueAtTime(volume, now);
+    gain.gain.exponentialRampToValueAtTime(0.0005, now + 0.35);
+
+    osc.connect(filter);
+    filter.connect(gain);
+    gain.connect(this.sfxGain);
+
+    osc.start(now);
+    osc.stop(now + 0.38);
+
+    // Subtle harmonic overtone (bell shimmer)
+    if (normalized > 0.45) {
+      const overtone = this.ctx.createOscillator();
+      const overGain = this.ctx.createGain();
+      overtone.type = 'triangle';
+      overtone.frequency.setValueAtTime(freq * 2.0, now);
+
+      overGain.gain.setValueAtTime(volume * 0.25, now);
+      overGain.gain.exponentialRampToValueAtTime(0.0001, now + 0.18);
+
+      overtone.connect(overGain);
+      overGain.connect(this.sfxGain);
+
+      overtone.start(now);
+      overtone.stop(now + 0.2);
+    }
+
+    // Haptic feedback
+    if (typeof navigator !== 'undefined' && 'vibrate' in navigator && normalized > 0.4) {
+      try {
+        navigator.vibrate(Math.min(Math.round(normalized * 16), 25));
+      } catch {
+        // Ignored
+      }
+    }
+  }
+
+  /**
+   * Sound effect for gravity rotation / perspective shift
+   */
+  public playRotate() {
+    if (this.isMuted) return;
+    this.initContext();
+    if (!this.ctx || !this.sfxGain) return;
+
+    const now = this.ctx.currentTime;
+
+    // Sub-bass sweep
+    const subOsc = this.ctx.createOscillator();
+    const subGain = this.ctx.createGain();
+    subOsc.type = 'sine';
+    subOsc.frequency.setValueAtTime(85, now);
+    subOsc.frequency.exponentialRampToValueAtTime(42, now + 0.32);
+
+    subGain.gain.setValueAtTime(0.25, now);
+    subGain.gain.exponentialRampToValueAtTime(0.001, now + 0.34);
+
+    subOsc.connect(subGain);
+    subGain.connect(this.sfxGain);
+    subOsc.start(now);
+    subOsc.stop(now + 0.36);
+
+    // Resonant spatial air shimmer
+    const osc = this.ctx.createOscillator();
+    const filter = this.ctx.createBiquadFilter();
+    const gain = this.ctx.createGain();
+
+    osc.type = 'triangle';
+    osc.frequency.setValueAtTime(280, now);
+    osc.frequency.exponentialRampToValueAtTime(560, now + 0.14);
+    osc.frequency.exponentialRampToValueAtTime(190, now + 0.35);
+
+    filter.type = 'bandpass';
+    filter.frequency.setValueAtTime(620, now);
+    filter.Q.setValueAtTime(3.5, now);
+
+    gain.gain.setValueAtTime(0.12, now);
+    gain.gain.exponentialRampToValueAtTime(0.001, now + 0.35);
+
+    osc.connect(filter);
+    filter.connect(gain);
+    gain.connect(this.sfxGain);
+
+    osc.start(now);
+    osc.stop(now + 0.36);
+
+    if (typeof navigator !== 'undefined' && 'vibrate' in navigator) {
+      try {
+        navigator.vibrate(18);
+      } catch {
+        // Ignored
+      }
+    }
+  }
+
+  /**
+   * Celestial crystal chime arpeggio for star collection
+   */
+  public playStarCollect(collectedCount: number = 1) {
+    if (this.isMuted) return;
+    this.initContext();
+    if (!this.ctx || !this.sfxGain) return;
+
+    const chordTones = [
+      [622.25, 830.61, 932.33, 1244.50], // Eb5, Ab5, Bb5, Eb6
+      [739.99, 932.33, 1108.73, 1479.98], // Gb5, Bb5, Db6, Gb6
+      [830.61, 1108.73, 1244.50, 1661.22] // Ab5, Db6, Eb6, Ab6
+    ];
+
+    const chord = chordTones[(collectedCount - 1) % chordTones.length];
+    const now = this.ctx.currentTime;
+
+    chord.forEach((freq, idx) => {
+      if (!this.ctx || !this.sfxGain) return;
+      const osc = this.ctx.createOscillator();
+      const gain = this.ctx.createGain();
+
+      osc.type = 'sine';
+      osc.frequency.setValueAtTime(freq, now + idx * 0.055);
+
+      gain.gain.setValueAtTime(0, now + idx * 0.055);
+      gain.gain.linearRampToValueAtTime(0.22, now + idx * 0.055 + 0.015);
+      gain.gain.exponentialRampToValueAtTime(0.0005, now + idx * 0.055 + 0.55);
+
+      osc.connect(gain);
+      gain.connect(this.sfxGain);
+
+      osc.start(now + idx * 0.055);
+      osc.stop(now + idx * 0.055 + 0.6);
+    });
+
+    if (typeof navigator !== 'undefined' && 'vibrate' in navigator) {
+      try {
+        navigator.vibrate([15, 30, 25]);
+      } catch {
+        // Ignored
+      }
+    }
+  }
+
+  /**
+   * Shimmering sound when passing through a phase barrier
+   */
+  public playPhasePass() {
+    if (this.isMuted) return;
+    this.initContext();
+    if (!this.ctx || !this.sfxGain) return;
+
+    const now = this.ctx.currentTime;
+    const osc = this.ctx.createOscillator();
+    const gain = this.ctx.createGain();
+
+    osc.type = 'sine';
+    osc.frequency.setValueAtTime(587.33, now);
+    osc.frequency.exponentialRampToValueAtTime(1174.66, now + 0.14);
+
+    const filter = this.ctx.createBiquadFilter();
+    filter.type = 'lowpass';
+    filter.frequency.setValueAtTime(1600, now);
+
+    gain.gain.setValueAtTime(0.12, now);
+    gain.gain.exponentialRampToValueAtTime(0.001, now + 0.22);
+
+    osc.connect(filter);
+    filter.connect(gain);
+    gain.connect(this.sfxGain);
+
+    osc.start(now);
+    osc.stop(now + 0.24);
+  }
+
+  /**
+   * Portal warp sound
+   */
+  public playPortal() {
+    if (this.isMuted) return;
+    this.initContext();
+    if (!this.ctx || !this.sfxGain) return;
+
+    const now = this.ctx.currentTime;
+    const osc = this.ctx.createOscillator();
+    const gain = this.ctx.createGain();
+
+    osc.type = 'sine';
+    osc.frequency.setValueAtTime(311.13, now);
+    osc.frequency.linearRampToValueAtTime(830.61, now + 0.09);
+    osc.frequency.exponentialRampToValueAtTime(207.65, now + 0.28);
+
+    gain.gain.setValueAtTime(0.22, now);
+    gain.gain.exponentialRampToValueAtTime(0.001, now + 0.3);
+
+    osc.connect(gain);
+    gain.connect(this.sfxGain);
+
+    osc.start(now);
+    osc.stop(now + 0.32);
+  }
+
+  /**
+   * Laser interception / ball vaporize
+   */
+  public playLaserHit() {
+    if (this.isMuted) return;
+    this.initContext();
+    if (!this.ctx || !this.sfxGain) return;
+
+    const now = this.ctx.currentTime;
+    const osc = this.ctx.createOscillator();
+    const gain = this.ctx.createGain();
+
+    osc.type = 'sawtooth';
+    osc.frequency.setValueAtTime(440, now);
+    osc.frequency.exponentialRampToValueAtTime(55, now + 0.28);
+
+    gain.gain.setValueAtTime(0.22, now);
+    gain.gain.exponentialRampToValueAtTime(0.001, now + 0.3);
+
+    osc.connect(gain);
+    gain.connect(this.sfxGain);
+
+    osc.start(now);
+    osc.stop(now + 0.32);
+
+    if (typeof navigator !== 'undefined' && 'vibrate' in navigator) {
+      try {
+        navigator.vibrate([40, 40, 50]);
+      } catch {
+        // Ignored
+      }
+    }
+  }
+
+  /**
+   * Triumphant level victory chord (Eb Major / Lydian celestial chord)
+   */
+  public playVictory() {
+    if (this.isMuted) return;
+    this.initContext();
+    if (!this.ctx || !this.sfxGain) return;
+
+    const chord = [311.13, 392.00, 466.16, 622.25, 783.99, 932.33]; // Eb Major 7th / 9th
+    const now = this.ctx.currentTime;
+
+    chord.forEach((freq, idx) => {
+      if (!this.ctx || !this.sfxGain) return;
+      const osc = this.ctx.createOscillator();
+      const gain = this.ctx.createGain();
+
+      osc.type = idx % 2 === 0 ? 'sine' : 'triangle';
+      osc.frequency.setValueAtTime(freq, now + idx * 0.045);
+
+      gain.gain.setValueAtTime(0, now + idx * 0.045);
+      gain.gain.linearRampToValueAtTime(0.2, now + idx * 0.045 + 0.06);
+      gain.gain.exponentialRampToValueAtTime(0.0005, now + 1.6);
+
+      osc.connect(gain);
+      gain.connect(this.sfxGain);
+
+      osc.start(now + idx * 0.045);
+      osc.stop(now + 1.7);
+    });
+
+    if (typeof navigator !== 'undefined' && 'vibrate' in navigator) {
+      try {
+        navigator.vibrate([30, 60, 40, 80]);
+      } catch {
+        // Ignored
+      }
+    }
+  }
+}
+
+export const sound = new SoundEngine();
