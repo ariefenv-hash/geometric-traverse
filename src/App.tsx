@@ -53,6 +53,7 @@ import { HintCard } from './components/HintCard';
 import { CachePurgeModal } from './components/CachePurgeModal';
 import { SkinPickerModal } from './components/SkinPickerModal';
 import type { ObstacleType } from './game/types';
+import { TiltController } from './game/tilt';
 
 export default function App() {
   const [currentLevelIndex, setCurrentLevelIndex] = useState<number>(0);
@@ -410,54 +411,54 @@ export default function App() {
     });
   }, []);
 
-  // Gyroscope orientation handler
-  const handleToggleGyro = async () => {
+  // Real-gravity tilt controller (“体感”): the actual gravity vector is
+  // projected into the screen plane from deviceorientation events (see
+  // src/game/tilt.ts). Auto-calibrated at attach, dead-zoned while flat.
+  const tiltRef = useRef<TiltController | null>(null);
+  const [gyroHint, setGyroHint] = useState<string | null>(null);
+  useEffect(() => {
+    if (!gyroHint) return;
+    const t = window.setTimeout(() => setGyroHint(null), 3600);
+    return () => window.clearTimeout(t);
+  }, [gyroHint]);
+
+  const handleToggleGyro = useCallback(async () => {
     sound.unlock();
     if (isGyroActive) {
+      tiltRef.current?.detach();
       setIsGyroActive(false);
       return;
     }
-
-    // Check for DeviceOrientationEvent permission (iOS 13+)
-    if (
-      typeof DeviceOrientationEvent !== 'undefined' &&
-      typeof (DeviceOrientationEvent as unknown as { requestPermission?: () => Promise<string> }).requestPermission === 'function'
-    ) {
-      try {
-        const response = await (DeviceOrientationEvent as unknown as { requestPermission: () => Promise<string> }).requestPermission();
-        if (response === 'granted') {
-          setIsGyroActive(true);
-        }
-      } catch {
-        // Fallback
-        setIsGyroActive(true);
-      }
-    } else {
-      setIsGyroActive(true);
+    if (!TiltController.supported()) {
+      setGyroHint('当前浏览器不支持陀螺仪 (DeviceOrientation)');
+      return;
     }
-  };
-
-  useEffect(() => {
-    if (!isGyroActive) return;
-
-    const handleOrientation = (e: DeviceOrientationEvent) => {
-      if (e.gamma === null || e.beta === null) return;
-      // gamma: Left/Right tilt (-90 to 90)
-      // beta: Front/Back tilt (-180 to 180)
-      const gx = e.gamma / 45; // Normalized
-      const gy = (e.beta - 40) / 45; // Calibrated for holding phone naturally at 40° angle
-
-      let angle = Math.atan2(gx, gy);
-      if (angle < 0) angle += Math.PI * 2;
-
-      const ws = worldStateRef.current;
-      if (ws.status !== 'playing') return;
-      ws.targetAngle = angle;
-      setHudState(prev => ({ ...prev, gravityAngle: angle }));
-    };
-
-    window.addEventListener('deviceorientation', handleOrientation);
-    return () => window.removeEventListener('deviceorientation', handleOrientation);
+    const perm = await TiltController.requestPermission();
+    if (perm === 'denied') {
+      setGyroHint('陀螺仪权限被拒绝 —— 请在浏览器设置中允许「动作与方向」后重试');
+      return;
+    }
+    if (!tiltRef.current) {
+      tiltRef.current = new TiltController({
+        onAngle: angle => {
+          const ws = worldStateRef.current;
+          if (ws.status === 'playing') ws.targetAngle = angle;
+        },
+        onStatus: status => {
+          if (status === 'unavailable') {
+            tiltRef.current?.detach();
+            setIsGyroActive(false);
+            setGyroHint('此设备没有可用的陀螺仪 —— 体感需要手机/平板传感器');
+          }
+        }
+      });
+      // Field-debug + headless-test hook (also usable from a real phone via
+      // remote devtools to inspect live calibration).
+      (window as unknown as { __gtTilt?: TiltController }).__gtTilt = tiltRef.current;
+    }
+    tiltRef.current.setCurrentAngle(worldStateRef.current.gravityAngle);
+    tiltRef.current.attach();
+    setIsGyroActive(true);
   }, [isGyroActive]);
 
   // Next level handler
@@ -604,6 +605,13 @@ export default function App() {
         ? 'bg-void-radial text-stone-100'
         : 'bg-alabaster-radial text-stone-900'
     }`}>
+      
+      {/* Gyro / permission hint toast (auto-dismisses; animation mirrors the timer) */}
+      {gyroHint && (
+        <div className="gyro-hint-toast absolute top-16 left-1/2 z-40 px-4 py-2 rounded-full text-xs font-medium bg-sky-500/15 text-sky-300 border border-sky-400/30 backdrop-blur-md shadow-lg shadow-sky-500/10 pointer-events-none whitespace-nowrap">
+          {gyroHint}
+        </div>
+      )}
       
       {/* Top Bar HUD */}
       <HUD

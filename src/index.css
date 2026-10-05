@@ -121,3 +121,15 @@
   animation: record-confetti 0.95s ease-out forwards;
   pointer-events: none;
 }
+
+/* Gyro hint toast: fade in, hold, fade out (3.6s total, mirrors the JS timer).
+   Uses its own translate since the toast is centered via left-1/2. */
+@keyframes gyro-hint {
+  0% { opacity: 0; transform: translate(-50%, -6px); }
+  8% { opacity: 1; transform: translate(-50%, 0); }
+  82% { opacity: 1; transform: translate(-50%, 0); }
+  100% { opacity: 0; transform: translate(-50%, -4px); }
+}
+.gyro-hint-toast {
+  animation: gyro-hint 3.6s ease-in-out both;
+}

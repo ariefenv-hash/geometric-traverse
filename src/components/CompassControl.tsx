@@ -206,7 +206,7 @@ export const CompassControl: React.FC<CompassControlProps> = ({
               ? 'bg-stone-800/40 hover:bg-stone-800 text-stone-400 border border-stone-700/40'
               : 'bg-stone-100 hover:bg-stone-200 text-stone-600 border border-stone-200'
           }`}
-          title={isGyroActive ? '陀螺仪体感重力已开启 (倾斜手机控制)' : '开启移动端陀螺仪体感重力'}
+          title={isGyroActive ? '体感重力进行中 —— 再次点击关闭' : '开启陀螺仪体感重力（按当前握持姿态自动校准，倾斜设备即倾斜重力）'}
         >
           <Smartphone className={`w-3.5 h-3.5 ${isGyroActive ? 'text-sky-400 animate-pulse' : ''}`} />
           <span className="hidden md:inline">{isGyroActive ? '体感开' : '体感'}</span>

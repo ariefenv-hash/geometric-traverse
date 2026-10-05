@@ -108,7 +108,7 @@ const STEPS: Step[] = [
           </li>
           <li className="flex gap-2.5">
             <span className="shrink-0 mt-0.5 text-emerald-400 font-bold text-xs">体感</span>
-            <span>点击罗盘区的「体感」按钮开启陀螺仪——倾斜手机即可改变重力，非常直观。</span>
+            <span>点击罗盘区的「体感」按钮开启陀螺仪——倾斜手机即可改变重力。开启瞬间按当前握持姿态自动校准，平放即锁定不动，非常直观。</span>
           </li>
         </ul>
         <p className="mt-3 text-xs text-stone-500 leading-relaxed">
