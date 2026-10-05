@@ -95,21 +95,29 @@ export function getSkinMeta(id: string): BallSkinInfo | null {
 /** Raw SVG source for a skin id (used by the picker previews). */
 export function getSkinSvg(id: string): string | null {
   const idx = BALL_SKINS.findIndex(s => s.id === id);
-  return idx >= 0 ? SKIN_ART[idx] : null;
+  return idx >= 0 ? SKIN_ART[idx] ?? null : null;
 }
 
 // ---------------------------------------------------------------------------
 // Persistence
 // ---------------------------------------------------------------------------
 
+// drawBall calls getSelectedSkinId() every frame; hitting localStorage +
+// JSON.parse 60×/s is pure waste. The id only changes through
+// setSelectedSkinId(), so a tiny write-through cache is enough.
+let cachedSkinId: string | null = null;
+
 /** Read the persisted skin id; corrupted / unknown / missing → classic. */
 export function getSelectedSkinId(): string {
+  if (cachedSkinId) return cachedSkinId;
   if (typeof localStorage === 'undefined') return CLASSIC_SKIN_ID;
   try {
     const raw = localStorage.getItem(SKIN_STORAGE_KEY);
     if (!raw) return CLASSIC_SKIN_ID;
     const id = JSON.parse(raw);
-    return typeof id === 'string' && getSkinMeta(id) ? id : CLASSIC_SKIN_ID;
+    const resolved = typeof id === 'string' && getSkinMeta(id) ? id : CLASSIC_SKIN_ID;
+    cachedSkinId = resolved;
+    return resolved;
   } catch {
     return CLASSIC_SKIN_ID;
   }
@@ -121,6 +129,7 @@ export function setSelectedSkinId(id: string): void {
   try {
     if (id !== CLASSIC_SKIN_ID && !getSkinMeta(id)) return;
     localStorage.setItem(SKIN_STORAGE_KEY, JSON.stringify(id));
+    cachedSkinId = id;
   } catch {
     /* storage full / disabled — cosmetic preference, ignore */
   }
@@ -144,10 +153,21 @@ function toDataUri(svg: string): string {
 export function ensureSkinImagesLoaded(): void {
   if (preloadStarted || typeof Image === 'undefined') return;
   preloadStarted = true;
+  // The sprite list is index-aligned with BALL_SKINS; fail loudly in dev if
+  // the two registries ever drift apart (previously a shorter SKIN_ART
+  // silently produced broken "…undefined" data URIs).
+  console.assert(
+    SKIN_ART.length === BALL_SKINS.length,
+    '[skins] SKIN_ART entries (%s) out of sync with BALL_SKINS (%s)',
+    SKIN_ART.length,
+    BALL_SKINS.length
+  );
   BALL_SKINS.forEach((skin, i) => {
+    const svg = SKIN_ART[i];
+    if (!svg) return;
     const img = new Image();
     img.onload = () => { spriteCache.set(skin.id, img); };
-    img.src = toDataUri(SKIN_ART[i]);
+    img.src = toDataUri(svg);
   });
 }
 

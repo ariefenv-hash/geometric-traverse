@@ -197,7 +197,13 @@ export function draftFromLevelConfig(cfg: LevelConfig, name?: string): EditorDra
       gravityScale: cfg.physics?.gravityScale ?? 1,
       restitution: cfg.physics?.restitution ?? DEFAULT_RESTITUTION
     },
-    nextId: cfg.obstacles.length + 1
+    // Seed the id counter past the highest numeric suffix already in use —
+    // obstacles.length + 1 collided on imported levels with sparse ids
+    // (e.g. pb1…pb9 has 2 obstacles but nextId must be ≥ 10).
+    nextId: cfg.obstacles.reduce((m, o) => {
+      const match = /(\d+)$/.exec(o.id);
+      return match ? Math.max(m, parseInt(match[1], 10)) : m;
+    }, 0) + 1
   };
 }
 
@@ -263,20 +269,30 @@ function rectContains(o: AnyObstacle, px: number, py: number): boolean {
   return px >= o.x && px <= o.x + o.width && py >= o.y && py <= o.y + o.height;
 }
 
+/** NaN/Infinity guard: every comparison against NaN is false, so dirty
+ *  numbers used to slip through ALL validation gates below and get persisted
+ *  as null via JSON.stringify. Validate finiteness first. */
+function isFiniteNumber(v: unknown): v is number {
+  return typeof v === 'number' && Number.isFinite(v);
+}
+
 export function validateDraft(draft: EditorDraft): DraftIssues {
   const errors: string[] = [];
   const warnings: string[] = [];
   const W = draft.arenaWidth;
   const H = draft.arenaHeight;
 
-  // Ball start / exit bounds
+  // Ball start / exit bounds (NaN-safe)
   if (
+    !isFiniteNumber(draft.ballStart.x) || !isFiniteNumber(draft.ballStart.y) ||
     draft.ballStart.x < 14 || draft.ballStart.x > W - 14 ||
     draft.ballStart.y < 14 || draft.ballStart.y > H - 14
   ) {
     errors.push('球起点位于竞技场边界之外');
   }
   if (
+    !isFiniteNumber(draft.exit.x) || !isFiniteNumber(draft.exit.y) ||
+    !isFiniteNumber(draft.exit.radius) ||
     draft.exit.x < draft.exit.radius || draft.exit.x > W - draft.exit.radius ||
     draft.exit.y < draft.exit.radius || draft.exit.y > H - draft.exit.radius
   ) {
@@ -287,17 +303,65 @@ export function validateDraft(draft: EditorDraft): DraftIssues {
   if (draft.stars.length === 0) {
     errors.push('至少需要放置 1 颗星核');
   }
-  if (draft.exit.requiredStars < 1) {
+  if (!(draft.exit.requiredStars >= 1)) {
+    // "!(x >= 1)" (not "x < 1") so NaN also lands here instead of passing.
     errors.push('开门所需星核数至少为 1');
   }
   if (draft.exit.requiredStars > draft.stars.length) {
     errors.push(`开门需要 ${draft.exit.requiredStars} 颗星核，但场上只有 ${draft.stars.length} 颗`);
   }
+  for (const st of draft.stars) {
+    if (
+      !isFiniteNumber(st.x) || !isFiniteNumber(st.y) ||
+      st.x < st.radius || st.x > W - st.radius ||
+      st.y < st.radius || st.y > H - st.radius
+    ) {
+      errors.push(`星核 ${st.id} 位于竞技场边界之外`);
+    }
+  }
 
-  // Obstacle bounds
+  // Obstacle bounds (NaN-safe geometry + per-type numeric fields)
   for (const o of draft.obstacles) {
+    if (
+      !isFiniteNumber(o.x) || !isFiniteNumber(o.y) ||
+      !isFiniteNumber(o.width) || !isFiniteNumber(o.height)
+    ) {
+      errors.push(`机关 ${o.id} 的坐标/尺寸包含非法数值`);
+      continue;
+    }
     if (o.x + o.width < 0 || o.x > W || o.y + o.height < 0 || o.y > H) {
       errors.push(`机关 ${o.id} 完全位于竞技场之外`);
+    }
+    switch (o.type) {
+      case 'anti_gravity':
+        if (!isFiniteNumber(o.force)) errors.push(`反重力场 ${o.id} 的力度非法`);
+        break;
+      case 'bumper':
+        if (!isFiniteNumber(o.strength)) errors.push(`弹力垫 ${o.id} 的弹射力度非法`);
+        break;
+      case 'one_way_gate':
+        if (o.tolerance !== undefined && !isFiniteNumber(o.tolerance))
+          errors.push(`单向阀 ${o.id} 的容速阈值非法`);
+        break;
+      case 'laser_emitter':
+        if (o.angle !== undefined && !isFiniteNumber(o.angle))
+          errors.push(`激光发射器 ${o.id} 的角度参数非法`);
+        break;
+      case 'sliding_block':
+        if (
+          !isFiniteNumber(o.minX) || !isFiniteNumber(o.maxX) ||
+          !isFiniteNumber(o.minY) || !isFiniteNumber(o.maxY) ||
+          !isFiniteNumber(o.mass)
+        ) {
+          errors.push(`滑动方块 ${o.id} 的轨道/质量参数非法`);
+        }
+        break;
+      case 'portal':
+        if (!isFiniteNumber(o.radius)) errors.push(`折跃门 ${o.id} 的半径非法`);
+        break;
+      case 'fragile_wall':
+        if (!isFiniteNumber(o.hp)) errors.push(`碎裂墙 ${o.id} 的耐久非法`);
+        break;
     }
   }
 
@@ -436,6 +500,12 @@ export function checkLevelReachability(draft: EditorDraft): ReachabilityReport {
   const cellOf = (px: number, py: number) =>
     Math.min(cols - 1, Math.max(0, Math.floor(px / REACH_CELL))) +
     Math.min(rows - 1, Math.max(0, Math.floor(py / REACH_CELL))) * cols;
+  // Out-of-bounds targets must NOT clamp to an edge cell (the old clamp made
+  // stars placed outside the arena count as "reachable"). They are simply
+  // unreachable — the validator surfaces the dedicated bounds error.
+  const inBounds = (px: number, py: number) =>
+    Number.isFinite(px) && Number.isFinite(py) &&
+    px >= 0 && px <= draft.arenaWidth && py >= 0 && py <= draft.arenaHeight;
 
   // Build occupancy grid (hard solids only; fragile handled via second pass)
   const buildGrid = (includeFragile: boolean) => {
@@ -477,7 +547,9 @@ export function checkLevelReachability(draft: EditorDraft): ReachabilityReport {
     const queue: number[] = [cellOf(draft.ballStart.x, draft.ballStart.y)];
     seen[queue[0]] = 1;
     const targets = new Set<number>([cellOf(draft.exit.x, draft.exit.y)]);
-    for (const s of draft.stars) targets.add(cellOf(s.x, s.y));
+    for (const s of draft.stars) {
+      if (inBounds(s.x, s.y)) targets.add(cellOf(s.x, s.y));
+    }
 
     const hitTargets = new Set<number>();
     while (queue.length > 0) {
@@ -529,18 +601,20 @@ export function checkLevelReachability(draft: EditorDraft): ReachabilityReport {
   // Pass 1: fragile walls block
   const strictHits = floodFill(strictGrid);
   const exitCell = cellOf(draft.exit.x, draft.exit.y);
-  let gate = strictHits.has(exitCell);
-  let unreachable = draft.stars.filter(s => !strictHits.has(cellOf(s.x, s.y)));
+  let gate = inBounds(draft.exit.x, draft.exit.y) && strictHits.has(exitCell);
+  let unreachable = draft.stars.filter(s => !inBounds(s.x, s.y) || !strictHits.has(cellOf(s.x, s.y)));
   let fragileNeeded = false;
 
   // Pass 2 (only when something is unreachable): fragile walls count as open
   if (!gate || unreachable.length > 0) {
     const lenientHits = floodFill(buildGrid(false));
-    if (!gate && lenientHits.has(exitCell)) {
+    if (!gate && inBounds(draft.exit.x, draft.exit.y) && lenientHits.has(exitCell)) {
       gate = true;
       fragileNeeded = true;
     }
-    const lenientUnreachable = draft.stars.filter(s => !lenientHits.has(cellOf(s.x, s.y)));
+    const lenientUnreachable = draft.stars.filter(
+      s => !inBounds(s.x, s.y) || !lenientHits.has(cellOf(s.x, s.y))
+    );
     if (lenientUnreachable.length < unreachable.length) {
       unreachable = lenientUnreachable;
       fragileNeeded = true;

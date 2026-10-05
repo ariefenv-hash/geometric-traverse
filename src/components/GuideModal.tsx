@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useEffect } from 'react';
 import { X, RotateCw, Shield, Compass, Sparkles, Smartphone, Eye, ChevronsUp, DoorOpen, BrickWall, Target, Slash, GraduationCap } from 'lucide-react';
 import { ThemeMode } from '../game/types';
 
@@ -16,6 +16,16 @@ export const GuideModal: React.FC<GuideModalProps> = ({
   theme,
   onReplayTutorial
 }) => {
+  // Esc closes the guide (hooks stay above the early return).
+  useEffect(() => {
+    if (!isOpen) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [isOpen, onClose]);
+
   if (!isOpen) return null;
   const isDark = theme === 'dark';
 
@@ -178,7 +188,7 @@ export const GuideModal: React.FC<GuideModalProps> = ({
         <div className="mt-8 pt-5 border-t border-stone-800/60 dark:border-stone-800 light:border-stone-200 flex items-center justify-between gap-2 flex-wrap">
           <div className="flex items-center gap-2 flex-wrap">
             <a
-              href="/geometric-traverse.zip"
+              href="geometric-traverse.zip"
               download="geometric-traverse.zip"
               className="flex items-center gap-1.5 py-2.5 px-4 rounded-xl font-medium text-xs text-stone-300 dark:text-stone-300 light:text-stone-700 border border-stone-700/60 hover:bg-stone-800 transition-colors"
             >

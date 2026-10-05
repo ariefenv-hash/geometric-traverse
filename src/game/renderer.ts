@@ -95,6 +95,12 @@ const OBSTACLE_RENDERERS: Partial<Record<ObstacleType, RenderEntry[]>> = {
   ],
   linked_gate: [
     { layer: 6, draw: (ctx, obs, _s, isDark, time) => drawLinkedGate(ctx, obs as LinkedGateObstacle, isDark, time) }
+  ],
+  // Annihilation field: lethal on touch (physics.ts hazard behavior). Without
+  // this entry the zone is completely invisible — instant deaths with no tell.
+  // laser_emitter is intentionally absent: beams are drawn by drawLasers().
+  hazard: [
+    { layer: 5, draw: (ctx, obs, _s, isDark, time) => drawHazard(ctx, obs.x, obs.y, obs.width, obs.height, isDark, time) }
   ]
 };
 
@@ -151,8 +157,11 @@ export function renderGame(
   const scale = Math.min((width - margin) / arenaWidth, (height - margin) / arenaHeight);
 
   ctx.translate(centerX + (rCtx.shakeX ?? 0), centerY + (rCtx.shakeY ?? 0));
-  // Rotate arena so "down" relative to gravity is aligned, or smooth rotation
-  ctx.rotate(-visualRotation);
+  // Rotate arena so "down" relative to gravity is aligned, or smooth rotation.
+  // Physics gravity is (sin θ, cos θ); rotating by +θ maps it back to screen-down:
+  //   R(a)·(sinθ, cosθ) = (sin(θ−a), cos(θ−a)) → a = θ ⟹ (0, 1). A minus sign
+  //   here makes 90°/270° flips and gyro/360° modes fall towards the ceiling.
+  ctx.rotate(visualRotation);
   ctx.scale(scale, scale);
   ctx.translate(-arenaWidth / 2, -arenaHeight / 2);
 
@@ -307,6 +316,52 @@ function drawArenaBorder(
   ctx.restore();
 }
 
+// Annihilation field: pulsing crimson slab with warning cross-hatch.
+// Mirrors the editor's visual language (editorCanvas.ts 'hazard' palette) so
+// players recognise the lethal zone in-game.
+function drawHazard(
+  ctx: CanvasRenderingContext2D,
+  x: number,
+  y: number,
+  w: number,
+  h: number,
+  isDark: boolean,
+  time: number
+) {
+  ctx.save();
+
+  // Pulsing danger fill
+  const pulse = 0.5 + Math.sin(time * 3) * 0.5;
+  ctx.fillStyle = isDark
+    ? `rgba(239, 68, 68, ${0.14 + pulse * 0.08})`
+    : `rgba(220, 38, 38, ${0.14 + pulse * 0.08})`;
+  ctx.fillRect(x, y, w, h);
+
+  // Cross hatch (both diagonals) clipped to the zone
+  ctx.beginPath();
+  ctx.rect(x, y, w, h);
+  ctx.clip();
+  ctx.strokeStyle = isDark ? 'rgba(239, 68, 68, 0.55)' : 'rgba(185, 28, 28, 0.55)';
+  ctx.lineWidth = 1.5;
+  const step = 14;
+  ctx.beginPath();
+  for (let d = -h; d < w + h; d += step) {
+    ctx.moveTo(x + d, y);
+    ctx.lineTo(x + d + h, y + h);
+    ctx.moveTo(x + d, y + h);
+    ctx.lineTo(x + d + h, y);
+  }
+  ctx.stroke();
+  ctx.restore();
+
+  // Crisp warning border (unclipped)
+  ctx.save();
+  ctx.strokeStyle = isDark ? '#ef4444' : '#b91c1c';
+  ctx.lineWidth = 2;
+  ctx.strokeRect(x, y, w, h);
+  ctx.restore();
+}
+
 function drawWall(
   ctx: CanvasRenderingContext2D,
   x: number,
@@ -334,7 +389,9 @@ function drawWall(
     const x1 = Math.max(x, x + offset);
     const y1 = Math.max(y, y - offset);
     const x2 = Math.min(x + w, x + offset + h);
-    const y2 = Math.min(y + h, y + h);
+    // Slope-1 hatch: exit through the bottom edge (run = h) or, for the last
+    // few lines, through the right edge (run = w - offset). Never beyond.
+    const y2 = y + Math.min(h, w - offset);
     if (x1 < x + w && y1 < y + h) {
       ctx.moveTo(x1, y1);
       ctx.lineTo(x2, y2);
@@ -668,7 +725,8 @@ function drawLinkedGate(
       const x1 = Math.max(gate.x, gate.x + offset);
       const y1 = gate.y + Math.max(0, -offset);
       const x2 = Math.min(gate.x + gate.width, gate.x + offset + gate.height);
-      const y2 = gate.y + Math.min(gate.height, gate.height - offset);
+      // Exit run is min(height, width - offset) so slope-1 hatches stay 45°.
+      const y2 = gate.y + Math.min(gate.height, gate.width - offset);
       if (x1 < gate.x + gate.width && y2 > gate.y) {
         ctx.moveTo(x1, y1);
         ctx.lineTo(x2, y2);

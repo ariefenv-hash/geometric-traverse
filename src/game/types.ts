@@ -118,6 +118,9 @@ export interface PortalObstacle extends BaseObstacle {
   targetPortalId: string;
   radius: number;
   outAngleOffset?: number; // radians offset for momentum redirection
+  /** Runtime anti ping-pong flag (physics): false while the ball stands inside
+   *  the trigger zone after arriving through this portal; re-arms on exit. */
+  armed?: boolean;
 }
 
 export interface LaserEmitterObstacle extends BaseObstacle {

@@ -29,6 +29,13 @@ export const GameCanvas: React.FC<GameCanvasProps> = ({
   // Swipe gesture tracking
   const touchStartPos = useRef<{ x: number; y: number } | null>(null);
 
+  // Reset the camera interpolation whenever a new world (level/replay) is
+  // mounted — otherwise the camera eases from the previous level's accumulated
+  // angle while physics already runs at the new gravity angle.
+  useEffect(() => {
+    visualRotationRef.current = worldState.gravityAngle;
+  }, [worldState]);
+
   // Render & physics loop
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -98,6 +105,9 @@ export const GameCanvas: React.FC<GameCanvasProps> = ({
     const canvas = canvasRef.current;
     if (!canvas) return;
 
+    let dprMedia: MediaQueryList | null = null;
+    let dprMediaHandler: (() => void) | null = null;
+
     const handleResize = () => {
       const parent = canvas.parentElement;
       if (!parent) return;
@@ -110,6 +120,17 @@ export const GameCanvas: React.FC<GameCanvasProps> = ({
       canvas.height = height * dpr;
       canvas.style.width = `${width}px`;
       canvas.style.height = `${height}px`;
+
+      // Re-fit the backing store when the window moves to a display with a
+      // different devicePixelRatio (ResizeObserver alone won't fire for that).
+      if (dprMedia && dprMediaHandler) {
+        dprMedia.removeEventListener('change', dprMediaHandler);
+      }
+      if (typeof window.matchMedia === 'function') {
+        dprMedia = window.matchMedia(`(resolution: ${window.devicePixelRatio || 1}dppx)`);
+        dprMediaHandler = handleResize;
+        dprMedia.addEventListener('change', dprMediaHandler);
+      }
     };
 
     handleResize();
@@ -118,7 +139,12 @@ export const GameCanvas: React.FC<GameCanvasProps> = ({
       observer.observe(canvas.parentElement);
     }
 
-    return () => observer.disconnect();
+    return () => {
+      observer.disconnect();
+      if (dprMedia && dprMediaHandler) {
+        dprMedia.removeEventListener('change', dprMediaHandler);
+      }
+    };
   }, []);
 
   // Touch Swipe Gesture for quick 90° gravity rotation on canvas
@@ -159,6 +185,10 @@ export const GameCanvas: React.FC<GameCanvasProps> = ({
       // Tap on canvas nudges ball
       onNudgeBall();
     }
+
+    // Prevent the browser's synthetic click from firing after the handled
+    // touch — otherwise taps trigger TWO nudges (touchend + click).
+    e.preventDefault();
 
     touchStartPos.current = null;
   };

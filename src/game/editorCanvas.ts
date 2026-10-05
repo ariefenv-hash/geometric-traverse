@@ -256,7 +256,11 @@ function drawObstacleBody(
   ctx: CanvasRenderingContext2D,
   o: AnyObstacle,
   lw: (px: number) => number,
-  time: number
+  time: number,
+  /** arena→screen scale (EXCLUDING dpr). The old getTransform().a read
+   *  dpr×scale, which inverted the visibility threshold under zoom and
+   *  halved glyph sizes on HiDPI displays. */
+  scale: number
 ) {
   const pal = TYPE_COLORS[o.type] || TYPE_COLORS.wall;
   const { cx, cy } = center(o);
@@ -504,11 +508,11 @@ function drawObstacleBody(
   }
 
   // Type glyph (skip if the rect is too small on screen)
-  const scrW = o.width * (1 / (ctx.getTransform().a || 1));
-  const scrH = o.height * (1 / (ctx.getTransform().a || 1));
+  const scrW = o.width * scale;
+  const scrH = o.height * scale;
   if (scrW > 20 && scrH > 14) {
     ctx.fillStyle = pal.text;
-    ctx.font = `${11 / (ctx.getTransform().a || 1)}px "Noto Sans SC", sans-serif`;
+    ctx.font = `${11 / (scale || 1)}px "Noto Sans SC", sans-serif`;
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
     ctx.fillText(TYPE_GLYPH[o.type] || '?', cx, cy - (o.type === 'fragile_wall' ? 3 : 0));
@@ -579,7 +583,7 @@ export function drawEditorScene(
 
   // Obstacle bodies
   for (const o of draft.obstacles) {
-    drawObstacleBody(ctx, o, L, ui.time);
+    drawObstacleBody(ctx, o, L, ui.time, s);
   }
 
   // Stars

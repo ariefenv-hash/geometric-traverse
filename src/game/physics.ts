@@ -22,7 +22,8 @@ import {
   PressurePlateObstacle,
   SlidingBlockObstacle,
   StarItem,
-  Vector2D
+  Vector2D,
+  AntiGravityObstacle
 } from './types';
 
 export type { PhysicsWorldState };
@@ -158,12 +159,16 @@ export function isPhaseBarrierSolid(barrier: PhaseBarrierObstacle, gravityAngle:
 
 /**
  * Circle to AABB Box Collision and Resolution
+ * `friction` damps the tangential velocity component on impact (defaults to
+ * the engine constant so legacy call sites keep their feel; level/sandbox
+ * overrides like ice or mud now apply to collision bounces too).
  */
 function resolveCircleBoxCollision(
   cx: number, cy: number, r: number,
   vx: number, vy: number,
   bx: number, by: number, bw: number, bh: number,
-  restitution: number
+  restitution: number,
+  friction: number = FRICTION
 ): { x: number; y: number; vx: number; vy: number; hit: boolean; impactSpeed: number } {
   // Find closest point on box to circle
   const closestX = Math.max(bx, Math.min(cx, bx + bw));
@@ -191,9 +196,15 @@ function resolveCircleBoxCollision(
 
     if (dot < 0) {
       impactSpeed = Math.abs(dot);
-      // Reflect velocity along normal
-      newVx = (vx - (1 + restitution) * dot * nx) * FRICTION;
-      newVy = (vy - (1 + restitution) * dot * ny) * FRICTION;
+      // Split velocity into normal + tangential parts: restitution flips the
+      // normal component, friction damps only the tangential one.
+      const vnx = dot * nx;
+      const vny = dot * ny;
+      const vtx = vx - vnx;
+      const vty = vy - vny;
+      const bounce = -restitution * dot; // positive outgoing normal speed
+      newVx = vtx * friction + bounce * nx;
+      newVy = vty * friction + bounce * ny;
     }
 
     return { x: resolvedX, y: resolvedY, vx: newVx, vy: newVy, hit: true, impactSpeed };
@@ -211,13 +222,21 @@ function resolveCircleBoxCollision(
     else if (minD === dTop) ny = -1;
     else ny = 1;
 
+    // Eject along the nearest-edge normal. Keep the tangential velocity
+    // (previously it was wiped out whenever the eject normal was axis-aligned)
+    // and flip the normal component outward with restitution.
+    const vn = vx * nx + vy * ny;
+    const vtx = vx - vn * nx;
+    const vty = vy - vn * ny;
+    const outN = Math.abs(vn) * restitution;
+
     return {
       x: cx + nx * (r + 1),
       y: cy + ny * (r + 1),
-      vx: nx * Math.abs(vx) * restitution,
-      vy: ny * Math.abs(vy) * restitution,
+      vx: vtx + nx * outN,
+      vy: vty + ny * outN,
       hit: true,
-      impactSpeed: Math.hypot(vx, vy)
+      impactSpeed: Math.abs(vn)
     };
   }
 
@@ -247,7 +266,8 @@ function collideBallAsWall(
     state.ball.x, state.ball.y, state.ball.radius,
     state.ball.vx, state.ball.vy,
     bx, by, bw, bh,
-    restitution
+    restitution,
+    state.params.friction
   );
   if (col.hit) {
     state.ball.x = col.x;
@@ -358,20 +378,31 @@ const OBSTACLE_BEHAVIORS: Partial<Record<ObstacleType, ObstacleBehavior>> = {
   // this entry only handles the ball <-> block collision response.
   sliding_block: (state, obs) => {
     const sb = obs as SlidingBlockObstacle;
+    // Resolve using the RELATIVE velocity (ball seen from the block frame).
+    const relVx = state.ball.vx - sb.vx;
+    const relVy = state.ball.vy - sb.vy;
     const col = resolveCircleBoxCollision(
       state.ball.x, state.ball.y, state.ball.radius,
-      state.ball.vx - sb.vx, state.ball.vy - sb.vy,
+      relVx, relVy,
       sb.x, sb.y, sb.width, sb.height,
-      state.params.restitution
+      state.params.restitution,
+      state.params.friction
     );
     if (col.hit) {
       state.ball.x = col.x;
       state.ball.y = col.y;
       state.ball.vx = col.vx + sb.vx;
       state.ball.vy = col.vy + sb.vy;
-      // Transfer momentum to block
-      sb.vx += (state.ball.vx * 0.15);
-      sb.vy += (state.ball.vy * 0.15);
+      // Momentum transfer: the block receives the opposite of the ball's
+      // collision impulse (change of relative velocity), scaled by the mass
+      // ratio. The previous code used the POST-collision ball velocity —
+      // which includes the block's own velocity — so blocks self-accelerated
+      // (+15% per contact substep) and drifted TOWARDS the ball.
+      const dvx = col.vx - relVx;
+      const dvy = col.vy - relVy;
+      const transfer = 0.35 / Math.max(1, sb.mass);
+      sb.vx -= dvx * transfer;
+      sb.vy -= dvy * transfer;
       if (col.impactSpeed > 30) {
         sound.playImpact(col.impactSpeed);
       }
@@ -387,7 +418,8 @@ const OBSTACLE_BEHAVIORS: Partial<Record<ObstacleType, ObstacleBehavior>> = {
         state.ball.x, state.ball.y, state.ball.radius,
         state.ball.vx, state.ball.vy,
         pb.x, pb.y, pb.width, pb.height,
-        state.params.restitution * 0.8
+        state.params.restitution * 0.8,
+        state.params.friction
       );
       if (col.hit) {
         state.ball.x = col.x;
@@ -410,13 +442,24 @@ const OBSTACLE_BEHAVIORS: Partial<Record<ObstacleType, ObstacleBehavior>> = {
   },
 
   portal: (state, obs) => {
-    if (state.portalCooldown > 0) return;
     const port = obs as PortalObstacle;
+    const triggerR = port.radius || 24;
     const pCenterX = port.x + port.width / 2;
     const pCenterY = port.y + port.height / 2;
     const dist = Math.hypot(state.ball.x - pCenterX, state.ball.y - pCenterY);
 
-    if (dist < (port.radius || 24)) {
+    // Anti ping-pong: a portal disarms itself on arrival and only re-arms
+    // once the ball has FULLY left its trigger zone. Without this, a ball
+    // resting inside a ground-level portal teleports back and forth forever
+    // once the 0.45s cooldown expires.
+    if (dist > triggerR + state.ball.radius) {
+      port.armed = true;
+      return;
+    }
+    if (port.armed === false) return;
+    if (state.portalCooldown > 0) return;
+
+    if (dist < triggerR) {
       // Find target portal
       const target = state.obstacles.find(
         o => o.id === port.targetPortalId && o.type === 'portal'
@@ -428,6 +471,7 @@ const OBSTACLE_BEHAVIORS: Partial<Record<ObstacleType, ObstacleBehavior>> = {
         state.ball.x = targetCenterX;
         state.ball.y = targetCenterY;
         state.portalCooldown = 0.45; // prevent immediate re-entry
+        target.armed = false; // disarm destination until the ball exits it
 
         // Momentum redirection: rotate exit velocity by outAngleOffset (radians)
         if (port.outAngleOffset) {
@@ -460,6 +504,38 @@ const OBSTACLE_BEHAVIORS: Partial<Record<ObstacleType, ObstacleBehavior>> = {
     )) {
       triggerDeath(state);
     }
+  },
+
+  // Anti-gravity surge: continuous lift field inside the zone. Without a
+  // `direction`, the force directly opposes the current global gravity (so
+  // the "fountain" always pushes "up" however the arena is rotated).
+  anti_gravity: (state, obs, bctx) => {
+    const ag = obs as AntiGravityObstacle;
+    if (!circleBoxOverlap(
+      state.ball.x, state.ball.y, state.ball.radius,
+      ag.x, ag.y, ag.width, ag.height
+    )) return;
+
+    let ax: number, ay: number;
+    if (ag.direction) {
+      const d = DIRECTION_VECTORS[ag.direction];
+      ax = d.x;
+      ay = d.y;
+    } else {
+      const gl = Math.hypot(bctx.gx, bctx.gy);
+      if (gl > 0.0001) {
+        ax = -bctx.gx / gl;
+        ay = -bctx.gy / gl;
+      } else {
+        ax = 0;
+        ay = -1;
+      }
+    }
+    // `force` is a multiplier of the effective gravity magnitude (LV-06/09
+    // use 2.2–2.4: a net lift of ~1.2–1.4× g inside the field).
+    const accel = ag.force * GRAVITY_MAGNITUDE * state.params.gravityScale * bctx.subDt;
+    state.ball.vx += ax * accel;
+    state.ball.vy += ay * accel;
   },
 
   bumper: (state, obs) => {
@@ -834,6 +910,27 @@ export function updatePhysics(
     phasing: false
   };
 
+  // Laser beams depend only on emitter/solid geometry (not on the ball), so
+  // compute them once per frame — but sweep the ball against them EVERY
+  // SUBSTEP. A single end-of-frame check let fast balls fly straight through
+  // lethal beams (25–75 px per frame vs an ~11 px hit threshold).
+  state.lasers = computeLaserSegments(state.obstacles, arenaWidth, arenaHeight);
+
+  const sweepLaserInterception = (): boolean => {
+    for (const laser of state.lasers) {
+      const ballDist = distToSegment(
+        state.ball.x, state.ball.y,
+        laser.startX, laser.startY,
+        laser.endX, laser.endY
+      );
+      if (ballDist < state.ball.radius * 0.8) {
+        triggerDeath(state);
+        return true;
+      }
+    }
+    return false;
+  };
+
   for (let step = 0; step < subSteps; step++) {
     // 0. Linkage pre-pass (pressure plates -> linked gates)
     updateLinkages(state);
@@ -913,23 +1010,9 @@ export function updatePhysics(
       if (behavior) behavior(state, obs, bctx);
     }
     state.ball.isPhasing = bctx.phasing;
-  }
 
-  // 5. Recalculate Laser Beams (multi-bounce optics) and Check Interceptions
-  state.lasers = computeLaserSegments(state.obstacles, arenaWidth, arenaHeight);
-
-  for (const laser of state.lasers) {
-    // Check if ball intersects this active laser segment
-    const ballDist = distToSegment(
-      state.ball.x, state.ball.y,
-      laser.startX, laser.startY,
-      laser.endX, laser.endY
-    );
-
-    if (ballDist < state.ball.radius * 0.8) {
-      triggerDeath(state);
-      return;
-    }
+    // 5. Laser interception sweep (substep-granular, see note above)
+    if (sweepLaserInterception()) return;
   }
 
   // 6. Check Star Collection

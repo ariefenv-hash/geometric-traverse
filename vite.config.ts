@@ -6,9 +6,14 @@ import {defineConfig} from 'vite';
 export default defineConfig(() => {
   return {
     plugins: [react(), tailwindcss()],
+    // Relative asset base so the build works when hosted under a sub-path
+    // (e.g. GitHub Pages project sites at <user>.github.io/<repo>/).
+    // Absolute '/assets/...' URLs 404 in that context and render a blank page.
+    base: './',
     resolve: {
+      // Use import.meta.dirname (ESM-safe); __dirname is unavailable in native ESM.
       alias: {
-        '@': path.resolve(__dirname, '.'),
+        '@': path.resolve(import.meta.dirname ?? process.cwd(), '.'),
       },
     },
     server: {

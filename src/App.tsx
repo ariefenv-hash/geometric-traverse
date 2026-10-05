@@ -74,6 +74,19 @@ export default function App() {
   // World physics mutable state
   const worldStateRef = useRef<PhysicsWorldState>(createWorldState(currentLevel));
 
+  // Mirror of the progress state for side-effect-free reads inside the victory
+  // poll (the updater itself must stay pure).
+  const progressRef = useRef(progress);
+  useEffect(() => {
+    progressRef.current = progress;
+  }, [progress]);
+
+  // Guards against the victory modal re-opening after the player dismissed it
+  // ("关卡矩阵" / exit-playtest): the world keeps isWon=true until initLevel,
+  // so the 80ms poll would otherwise resurrect the modal on top of whatever
+  // the player opened next.
+  const victoryHandledRef = useRef(false);
+
   // Track UI state for HUD display
   const [hudState, setHudState] = useState({
     starsCollected: 0,
@@ -85,6 +98,7 @@ export default function App() {
   // Reset or load level (paramOverrides let the sandbox tune physics on top)
   const initLevel = useCallback((lvl: LevelConfig, paramOverrides?: Partial<PhysicsParams>) => {
     worldStateRef.current = createWorldState(lvl, paramOverrides);
+    victoryHandledRef.current = false;
 
     setHudState({
       starsCollected: 0,
@@ -162,58 +176,60 @@ export default function App() {
       });
 
       // Handle Victory
-      if (ws.isWon && !isVictoryOpen) {
+      if (ws.isWon && !isVictoryOpen && !victoryHandledRef.current) {
+        victoryHandledRef.current = true;
         setIsVictoryOpen(true);
 
         // Playtesting user drafts never touches the official progress chain
         if (playtestLevel) return;
 
-        // Update progress
-        setProgress(prev => {
-          const lvlProgress = prev[currentLevel.id] || {
+        // Update progress (computed outside the state updater so the
+        // persistence side effect is not buried in a reducer that React may
+        // re-invoke, and so it always sees the latest committed progress).
+        const prev = progressRef.current;
+        const lvlProgress = prev[currentLevel.id] || {
+          unlocked: true,
+          completed: false,
+          starsEarned: 0,
+          bestRotations: 0,
+          bestTime: 0
+        };
+
+        const newStars = Math.max(lvlProgress.starsEarned, starsCount);
+        const newRotations = lvlProgress.bestRotations === 0
+          ? ws.movesCount
+          : Math.min(lvlProgress.bestRotations, ws.movesCount);
+        const newTime = lvlProgress.bestTime === 0
+          ? ws.elapsedTime
+          : Math.min(lvlProgress.bestTime, ws.elapsedTime);
+
+        const updated: Record<number, LevelProgress> = {
+          ...prev,
+          [currentLevel.id]: {
             unlocked: true,
-            completed: false,
-            starsEarned: 0,
-            bestRotations: 0,
-            bestTime: 0
-          };
-
-          const newStars = Math.max(lvlProgress.starsEarned, starsCount);
-          const newRotations = lvlProgress.bestRotations === 0
-            ? ws.movesCount
-            : Math.min(lvlProgress.bestRotations, ws.movesCount);
-          const newTime = lvlProgress.bestTime === 0
-            ? ws.elapsedTime
-            : Math.min(lvlProgress.bestTime, ws.elapsedTime);
-
-          const updated: Record<number, LevelProgress> = {
-            ...prev,
-            [currentLevel.id]: {
-              unlocked: true,
-              completed: true,
-              starsEarned: newStars,
-              bestRotations: newRotations,
-              bestTime: newTime
-            }
-          };
-
-          // Unlock next level if exists
-          const nextLvl = LEVELS[currentLevelIndex + 1];
-          if (nextLvl && (!updated[nextLvl.id] || !updated[nextLvl.id].unlocked)) {
-            updated[nextLvl.id] = {
-              ...(updated[nextLvl.id] || {
-                completed: false,
-                starsEarned: 0,
-                bestRotations: 0,
-                bestTime: 0
-              }),
-              unlocked: true
-            };
+            completed: true,
+            starsEarned: newStars,
+            bestRotations: newRotations,
+            bestTime: newTime
           }
+        };
 
-          saveLevelProgress(updated);
-          return updated;
-        });
+        // Unlock next level if exists
+        const nextLvl = LEVELS[currentLevelIndex + 1];
+        if (nextLvl && (!updated[nextLvl.id] || !updated[nextLvl.id].unlocked)) {
+          updated[nextLvl.id] = {
+            ...(updated[nextLvl.id] || {
+              completed: false,
+              starsEarned: 0,
+              bestRotations: 0,
+              bestTime: 0
+            }),
+            unlocked: true
+          };
+        }
+
+        saveLevelProgress(updated);
+        setProgress(updated);
       }
     }, 80);
 
@@ -364,7 +380,9 @@ export default function App() {
 
   const handleDeleteUserLevel = useCallback((entry: StoredUserLevel) => {
     if (!window.confirm(`确定删除「${entry.name}」？此操作不可撤销。`)) return;
-    setUserLevels(deleteUserLevel(entry.id));
+    const { list, ok } = deleteUserLevel(entry.id);
+    setUserLevels(list);
+    if (!ok) window.alert('删除操作未能写入存储（存储空间不足或不可用），刷新后可能恢复。');
     if (playingUserKey === entry.id) {
       setPlaytestLevel(null);
       setPlayingUserKey(null);
@@ -392,7 +410,13 @@ export default function App() {
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== 'r' && e.key !== 'R') return;
-      if (['INPUT', 'TEXTAREA'].includes((e.target as HTMLElement)?.tagName)) return;
+      if (e.repeat) return;
+      if (e.ctrlKey || e.metaKey || e.altKey) return; // keep browser reload shortcuts intact
+      const t = e.target as HTMLElement | null;
+      if (
+        t &&
+        (['INPUT', 'TEXTAREA', 'SELECT'].includes(t.tagName) || t.isContentEditable)
+      ) return;
       if (
         isLevelSelectOpen || isGuideOpen || isSandboxOpen ||
         isVictoryOpen || isEditorOpen || isCachePurgeOpen || isSkinPickerOpen || showOnboarding
@@ -550,6 +574,11 @@ export default function App() {
             theme={theme}
             continuous={continuousRotation}
             onToggleContinuous={() => setContinuousRotation(c => !c)}
+            keyboardEnabled={
+              !isLevelSelectOpen && !isGuideOpen && !isSandboxOpen &&
+              !isVictoryOpen && !isEditorOpen && !isCachePurgeOpen &&
+              !isSkinPickerOpen && !showOnboarding
+            }
           />
         </div>
       </main>
@@ -586,6 +615,7 @@ export default function App() {
           setIsVictoryOpen(false);
           setIsLevelSelectOpen(true);
         }}
+        onDismiss={() => setIsVictoryOpen(false)}
         hasNextLevel={!playtestLevel && currentLevelIndex < LEVELS.length - 1}
         theme={theme}
       />

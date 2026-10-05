@@ -29,6 +29,11 @@ export function loadUserLevels(): StoredUserLevel[] {
         typeof e.name === 'string' &&
         e.config &&
         typeof e.config.id === 'number' &&
+        // Without these, a half-written entry passes the filter and
+        // createWorldState throws on JSON.stringify(undefined) at play time.
+        e.config.ballStart &&
+        e.config.exit &&
+        Array.isArray(e.config.stars) &&
         Array.isArray(e.config.obstacles)
     ) as StoredUserLevel[];
   } catch {
@@ -36,30 +41,34 @@ export function loadUserLevels(): StoredUserLevel[] {
   }
 }
 
-export function persistUserLevels(list: StoredUserLevel[]): void {
+/** Write through; returns false when storage is full/unavailable so callers
+ *  can warn instead of the previous silent data loss on "已保存". */
+export function persistUserLevels(list: StoredUserLevel[]): boolean {
   try {
     localStorage.setItem(USER_LEVELS_STORAGE_KEY, JSON.stringify(list));
+    return true;
   } catch {
-    // Storage full / unavailable: fail silently, matching project convention
+    return false;
   }
 }
 
-/** Insert or update by entry id. Returns the next full list. */
-export function upsertUserLevel(entry: StoredUserLevel): StoredUserLevel[] {
+/** Insert or update by entry id. Returns the next full list plus whether the
+ *  write actually persisted. */
+export function upsertUserLevel(entry: StoredUserLevel): { list: StoredUserLevel[]; ok: boolean } {
   const list = loadUserLevels();
   const idx = list.findIndex(e => e.id === entry.id);
   const next =
     idx === -1
       ? [...list, entry]
       : list.map(e => (e.id === entry.id ? entry : e));
-  persistUserLevels(next);
-  return next;
+  const ok = persistUserLevels(next);
+  return { list: next, ok };
 }
 
-export function deleteUserLevel(id: string): StoredUserLevel[] {
+export function deleteUserLevel(id: string): { list: StoredUserLevel[]; ok: boolean } {
   const next = loadUserLevels().filter(e => e.id !== id);
-  persistUserLevels(next);
-  return next;
+  const ok = persistUserLevels(next);
+  return { list: next, ok };
 }
 
 export function makeUserLevelKey(): string {

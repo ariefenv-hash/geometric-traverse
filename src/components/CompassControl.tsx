@@ -12,6 +12,9 @@ interface CompassControlProps {
   theme: ThemeMode;
   continuous: boolean;
   onToggleContinuous: () => void;
+  /** False while a modal (onboarding, guide, editor, …) owns the keyboard —
+   *  the window-level shortcuts must not rotate gravity behind those UIs. */
+  keyboardEnabled?: boolean;
 }
 
 export const CompassControl: React.FC<CompassControlProps> = ({
@@ -23,7 +26,8 @@ export const CompassControl: React.FC<CompassControlProps> = ({
   onToggleGyro,
   theme,
   continuous,
-  onToggleContinuous
+  onToggleContinuous,
+  keyboardEnabled = true
 }) => {
   const isDark = theme === 'dark';
   const dialRef = useRef<HTMLDivElement>(null);
@@ -77,8 +81,16 @@ export const CompassControl: React.FC<CompassControlProps> = ({
   // Keyboard shortcut listener
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
+      // A modal owns the keyboard (onboarding walkthrough, editor, …)
+      if (!keyboardEnabled) return;
       // Don't trigger if user is typing in input
-      if (['INPUT', 'TEXTAREA'].includes((e.target as HTMLElement)?.tagName)) return;
+      const t = e.target as HTMLElement | null;
+      if (
+        t &&
+        (['INPUT', 'TEXTAREA', 'SELECT'].includes(t.tagName) || t.isContentEditable)
+      ) return;
+      // Discrete actions must not machine-gun while a key is held down
+      if (e.repeat) return;
 
       if (e.key === 'a' || e.key === 'A' || e.key === 'q' || e.key === 'Q' || e.key === 'ArrowLeft') {
         onRotateStep(-Math.PI / 2);
@@ -96,7 +108,7 @@ export const CompassControl: React.FC<CompassControlProps> = ({
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [onRotateStep, onSetAngle, onNudgeBall]);
+  }, [keyboardEnabled, onRotateStep, onSetAngle, onNudgeBall]);
 
   return (
     <div className="flex flex-col items-center gap-2 select-none pointer-events-auto">

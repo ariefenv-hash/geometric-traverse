@@ -185,9 +185,12 @@ export const HUD: React.FC<HUDProps> = ({
           {isDark ? <Sun className="w-4 h-4 text-amber-300" /> : <Moon className="w-4 h-4 text-indigo-600" />}
         </button>
 
-        {/* Download Project ZIP */}
+        {/* Download Project ZIP — relative href so it works on sub-path
+            deployments (GitHub Pages project sites). Run `npm run zip` once
+            before deploying; the script now emits into public/ so vite
+            copies the archive into the build output. */}
         <a
-          href="/geometric-traverse.zip"
+          href="geometric-traverse.zip"
           download="geometric-traverse.zip"
           className="p-2 rounded-lg text-stone-400 hover:text-stone-100 dark:hover:text-stone-100 light:hover:text-stone-900 hover:bg-stone-800/60 dark:hover:bg-stone-800/80 light:hover:bg-stone-100 transition-colors"
           title="打包下载完整项目源码 (ZIP)"

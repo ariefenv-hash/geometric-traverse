@@ -2,6 +2,13 @@
 @import url("https://fontsapi.zeoseven.com/2128/main/result.css");
 @import "tailwindcss";
 
+/* Tailwind v4: map the dark:/light: variants to the theme classes the app
+   toggles on <html> (App.tsx adds .dark / .light). Without these, `dark:`
+   follows prefers-color-scheme and `light:` never matches anything, so the
+   in-game theme switch has no effect on most components. */
+@custom-variant dark (&:where(.dark, .dark *));
+@custom-variant light (&:where(.light, .light *));
+
 @layer base {
   :root {
     --font-display: 'Syne', sans-serif;

@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useEffect } from 'react';
 import { Star, ArrowRight, RotateCcw, Grid, Award } from 'lucide-react';
 import { LevelConfig, ThemeMode } from '../game/types';
 
@@ -11,6 +11,8 @@ interface VictoryModalProps {
   onNextLevel: () => void;
   onReplay: () => void;
   onOpenLevelSelect: () => void;
+  /** Dismiss without any action (Esc / backdrop click). */
+  onDismiss: () => void;
   hasNextLevel: boolean;
   theme: ThemeMode;
 }
@@ -24,9 +26,21 @@ export const VictoryModal: React.FC<VictoryModalProps> = ({
   onNextLevel,
   onReplay,
   onOpenLevelSelect,
+  onDismiss,
   hasNextLevel,
   theme
 }) => {
+  // Esc dismisses the victory overlay. Hooks must run before the early
+  // return; the listener is only attached while the modal is open.
+  useEffect(() => {
+    if (!isOpen) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onDismiss();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [isOpen, onDismiss]);
+
   if (!isOpen) return null;
   const isDark = theme === 'dark';
 

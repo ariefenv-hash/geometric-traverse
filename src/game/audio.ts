@@ -21,7 +21,11 @@ class SoundEngine {
     311.13, 369.99, 415.30, 466.16, 554.37, // Octave 4
     622.25, 739.99, 830.61, 932.33, 1108.73 // Octave 5
   ];
-  private lastNoteTime: number = 0;
+  // Per-sfx throttle stamps. They previously shared ONE field, so a bumper
+  // twang would swallow a same-frame impact chime (and vice versa).
+  private lastImpactTime: number = 0;
+  private lastBumperTime: number = 0;
+  private lastPlateTime: number = 0;
 
   constructor() {
     // Initialized on first user gesture
@@ -29,8 +33,14 @@ class SoundEngine {
 
   private initContext() {
     if (this.ctx) {
-      if (this.ctx.state === 'suspended') {
-        this.ctx.resume();
+      // Any non-running state needs a resume — not just 'suspended'. iOS
+      // Safari reports 'interrupted' after a phone call/alarm, and resume()
+      // outside a user gesture rejects; swallow that instead of throwing an
+      // unhandled rejection from a physics-triggered sound.
+      if (this.ctx.state !== 'running') {
+        this.ctx.resume().catch(() => {
+          /* Needs a user gesture — the unlock listener will retry. */
+        });
       }
       return;
     }
@@ -142,8 +152,8 @@ class SoundEngine {
 
     const now = this.ctx.currentTime;
     // Throttle micro impacts to avoid frequency clutter
-    if (now - this.lastNoteTime < 0.06) return;
-    this.lastNoteTime = now;
+    if (now - this.lastImpactTime < 0.06) return;
+    this.lastImpactTime = now;
 
     const clampedSpeed = Math.min(Math.max(speed, 25), 450);
     const normalized = (clampedSpeed - 25) / 425;
@@ -168,7 +178,9 @@ class SoundEngine {
     filter.frequency.setValueAtTime(freq * 2.5, now);
 
     const volume = Math.min(0.06 + normalized * 0.22, 0.28);
-    gain.gain.setValueAtTime(volume, now);
+    // Soft attack: instant full-amplitude sine starts click audibly
+    gain.gain.setValueAtTime(0.0001, now);
+    gain.gain.linearRampToValueAtTime(volume, now + 0.005);
     gain.gain.exponentialRampToValueAtTime(0.0005, now + 0.35);
 
     osc.connect(filter);
@@ -185,7 +197,8 @@ class SoundEngine {
       overtone.type = 'triangle';
       overtone.frequency.setValueAtTime(freq * 2.0, now);
 
-      overGain.gain.setValueAtTime(volume * 0.25, now);
+      overGain.gain.setValueAtTime(0.0001, now);
+      overGain.gain.linearRampToValueAtTime(volume * 0.25, now + 0.005);
       overGain.gain.exponentialRampToValueAtTime(0.0001, now + 0.18);
 
       overtone.connect(overGain);
@@ -222,7 +235,8 @@ class SoundEngine {
     subOsc.frequency.setValueAtTime(85, now);
     subOsc.frequency.exponentialRampToValueAtTime(42, now + 0.32);
 
-    subGain.gain.setValueAtTime(0.25, now);
+    subGain.gain.setValueAtTime(0.0001, now);
+    subGain.gain.linearRampToValueAtTime(0.25, now + 0.005);
     subGain.gain.exponentialRampToValueAtTime(0.001, now + 0.34);
 
     subOsc.connect(subGain);
@@ -244,7 +258,8 @@ class SoundEngine {
     filter.frequency.setValueAtTime(620, now);
     filter.Q.setValueAtTime(3.5, now);
 
-    gain.gain.setValueAtTime(0.12, now);
+    gain.gain.setValueAtTime(0.0001, now);
+    gain.gain.linearRampToValueAtTime(0.12, now + 0.005);
     gain.gain.exponentialRampToValueAtTime(0.001, now + 0.35);
 
     osc.connect(filter);
@@ -328,7 +343,8 @@ class SoundEngine {
     filter.type = 'lowpass';
     filter.frequency.setValueAtTime(1600, now);
 
-    gain.gain.setValueAtTime(0.12, now);
+    gain.gain.setValueAtTime(0.0001, now);
+    gain.gain.linearRampToValueAtTime(0.12, now + 0.005);
     gain.gain.exponentialRampToValueAtTime(0.001, now + 0.22);
 
     osc.connect(filter);
@@ -356,7 +372,8 @@ class SoundEngine {
     osc.frequency.linearRampToValueAtTime(830.61, now + 0.09);
     osc.frequency.exponentialRampToValueAtTime(207.65, now + 0.28);
 
-    gain.gain.setValueAtTime(0.22, now);
+    gain.gain.setValueAtTime(0.0001, now);
+    gain.gain.linearRampToValueAtTime(0.22, now + 0.005);
     gain.gain.exponentialRampToValueAtTime(0.001, now + 0.3);
 
     osc.connect(gain);
@@ -382,7 +399,8 @@ class SoundEngine {
     osc.frequency.setValueAtTime(440, now);
     osc.frequency.exponentialRampToValueAtTime(55, now + 0.28);
 
-    gain.gain.setValueAtTime(0.22, now);
+    gain.gain.setValueAtTime(0.0001, now);
+    gain.gain.linearRampToValueAtTime(0.22, now + 0.005);
     gain.gain.exponentialRampToValueAtTime(0.001, now + 0.3);
 
     osc.connect(gain);
@@ -409,9 +427,10 @@ class SoundEngine {
     if (!this.ctx || !this.sfxGain) return;
 
     const now = this.ctx.currentTime;
-    // Throttle to avoid substep spam
-    if (now - this.lastNoteTime < 0.08) return;
-    this.lastNoteTime = now;
+    // Throttle to avoid substep spam (bumper has its own stamp so a bump no
+    // longer silences a same-frame wall impact chime)
+    if (now - this.lastBumperTime < 0.08) return;
+    this.lastBumperTime = now;
 
     // Springy pitch rise
     const osc = this.ctx.createOscillator();
@@ -421,7 +440,8 @@ class SoundEngine {
     osc.frequency.exponentialRampToValueAtTime(587.33, now + 0.09);
     osc.frequency.exponentialRampToValueAtTime(392, now + 0.16);
 
-    gain.gain.setValueAtTime(0.2, now);
+    gain.gain.setValueAtTime(0.0001, now);
+    gain.gain.linearRampToValueAtTime(0.2, now + 0.005);
     gain.gain.exponentialRampToValueAtTime(0.001, now + 0.22);
 
     osc.connect(gain);
@@ -435,7 +455,8 @@ class SoundEngine {
     thump.type = 'sine';
     thump.frequency.setValueAtTime(120, now);
     thump.frequency.exponentialRampToValueAtTime(60, now + 0.12);
-    thumpGain.gain.setValueAtTime(0.16, now);
+    thumpGain.gain.setValueAtTime(0.0001, now);
+    thumpGain.gain.linearRampToValueAtTime(0.16, now + 0.005);
     thumpGain.gain.exponentialRampToValueAtTime(0.001, now + 0.14);
     thump.connect(thumpGain);
     thumpGain.connect(this.sfxGain);
@@ -466,7 +487,8 @@ class SoundEngine {
     osc.frequency.setValueAtTime(240 + Math.random() * 60, now);
     osc.frequency.exponentialRampToValueAtTime(70, now + 0.09);
 
-    gain.gain.setValueAtTime(0.11, now);
+    gain.gain.setValueAtTime(0.0001, now);
+    gain.gain.linearRampToValueAtTime(0.11, now + 0.005);
     gain.gain.exponentialRampToValueAtTime(0.001, now + 0.11);
 
     osc.connect(gain);
@@ -491,7 +513,8 @@ class SoundEngine {
     rumble.type = 'sawtooth';
     rumble.frequency.setValueAtTime(160, now);
     rumble.frequency.exponentialRampToValueAtTime(38, now + 0.3);
-    rumbleGain.gain.setValueAtTime(0.2, now);
+    rumbleGain.gain.setValueAtTime(0.0001, now);
+    rumbleGain.gain.linearRampToValueAtTime(0.2, now + 0.005);
     rumbleGain.gain.exponentialRampToValueAtTime(0.001, now + 0.34);
     rumble.connect(rumbleGain);
     rumbleGain.connect(this.sfxGain);
@@ -504,7 +527,8 @@ class SoundEngine {
     shimmer.type = 'triangle';
     shimmer.frequency.setValueAtTime(880, now);
     shimmer.frequency.exponentialRampToValueAtTime(220, now + 0.22);
-    shimmerGain.gain.setValueAtTime(0.1, now);
+    shimmerGain.gain.setValueAtTime(0.0001, now);
+    shimmerGain.gain.linearRampToValueAtTime(0.1, now + 0.005);
     shimmerGain.gain.exponentialRampToValueAtTime(0.001, now + 0.26);
     shimmer.connect(shimmerGain);
     shimmerGain.connect(this.sfxGain);
@@ -529,8 +553,8 @@ class SoundEngine {
     if (!this.ctx || !this.sfxGain) return;
 
     const now = this.ctx.currentTime;
-    if (now - this.lastNoteTime < 0.15) return;
-    this.lastNoteTime = now;
+    if (now - this.lastPlateTime < 0.15) return;
+    this.lastPlateTime = now;
 
     const osc = this.ctx.createOscillator();
     const gain = this.ctx.createGain();
@@ -538,7 +562,8 @@ class SoundEngine {
     osc.frequency.setValueAtTime(523.25, now);
     osc.frequency.setValueAtTime(659.26, now + 0.06);
 
-    gain.gain.setValueAtTime(0.1, now);
+    gain.gain.setValueAtTime(0.0001, now);
+    gain.gain.linearRampToValueAtTime(0.1, now + 0.005);
     gain.gain.exponentialRampToValueAtTime(0.001, now + 0.2);
 
     osc.connect(gain);

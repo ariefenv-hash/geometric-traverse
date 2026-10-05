@@ -173,7 +173,14 @@ const NumInput: React.FC<{
       step={step}
       min={min}
       max={max}
-      onChange={e => onChange(parseFloat(e.target.value))}
+      onChange={e => {
+        const v = parseFloat(e.target.value);
+        // Clearing the field parses to NaN; writing NaN into the draft used
+        // to bypass every downstream clamp (Math.min/max with NaN → NaN) and
+        // JSON.stringify turned it into null on save. Ignore non-finite input
+        // and keep the previous value instead.
+        if (Number.isFinite(v)) onChange(v);
+      }}
       className="w-20 px-2 py-1 rounded-lg bg-stone-950/60 dark:bg-stone-950/60 light:bg-stone-100 border border-stone-800 dark:border-stone-800 light:border-stone-300 text-xs font-mono-tabular focus:border-sky-500 focus:outline-none"
     />
   </label>
@@ -295,6 +302,10 @@ export const LevelEditor: React.FC<LevelEditorProps> = ({
     if (!isOpen) return;
     const canvas = canvasRef.current;
     if (!canvas) return;
+
+    let dprMedia: MediaQueryList | null = null;
+    let dprMediaHandler: (() => void) | null = null;
+
     const handleResize = () => {
       const parent = canvas.parentElement;
       if (!parent) return;
@@ -303,11 +314,27 @@ export const LevelEditor: React.FC<LevelEditorProps> = ({
       canvas.height = parent.clientHeight * dpr;
       canvas.style.width = `${parent.clientWidth}px`;
       canvas.style.height = `${parent.clientHeight}px`;
+
+      // Cross-monitor moves change devicePixelRatio without a CSS resize.
+      if (dprMedia && dprMediaHandler) {
+        dprMedia.removeEventListener('change', dprMediaHandler);
+      }
+      if (typeof window.matchMedia === 'function') {
+        dprMedia = window.matchMedia(`(resolution: ${dpr}dppx)`);
+        dprMediaHandler = handleResize;
+        dprMedia.addEventListener('change', dprMediaHandler);
+      }
     };
+
     handleResize();
     const observer = new ResizeObserver(handleResize);
     if (canvas.parentElement) observer.observe(canvas.parentElement);
-    return () => observer.disconnect();
+    return () => {
+      observer.disconnect();
+      if (dprMedia && dprMediaHandler) {
+        dprMedia.removeEventListener('change', dprMediaHandler);
+      }
+    };
   }, [isOpen]);
 
   // Render loop (hooked once per open; reads latest state via refs)
@@ -347,19 +374,9 @@ export const LevelEditor: React.FC<LevelEditorProps> = ({
   }, [isOpen]);
 
   // --- editing operations --------------------------------------------------
-
-  const removeSelected = useCallback(() => {
-    const sel = selectedRef.current;
-    if (!sel) return;
-    if (sel.kind === 'obstacle') {
-      setDraft(d => ({ ...d, obstacles: d.obstacles.filter(o => o.id !== sel.id) }));
-    } else if (sel.kind === 'star') {
-      setDraft(d => ({ ...d, stars: d.stars.filter(s => s.id !== sel.id) }));
-    } else {
-      return; // exit & ballstart are permanent fixtures
-    }
-    setSelected(null);
-  }, []);
+  // NOTE: removeSelected is defined after pushHistory (below) because it
+  // snapshots the undo stack; declaring it earlier would reference a
+  // not-yet-initialized const.
 
   // --- undo / redo ----------------------------------------------------------
 
@@ -427,6 +444,23 @@ export const LevelEditor: React.FC<LevelEditorProps> = ({
     setSelected(null);
     syncHistoryInfo();
   }, [syncHistoryInfo]);
+
+  // --- editing operations --------------------------------------------------
+
+  const removeSelected = useCallback(() => {
+    const sel = selectedRef.current;
+    if (!sel) return;
+    if (sel.kind === 'obstacle') {
+      pushHistory(); // deletions must be undoable like erase-tool removals
+      setDraft(d => ({ ...d, obstacles: d.obstacles.filter(o => o.id !== sel.id) }));
+    } else if (sel.kind === 'star') {
+      pushHistory();
+      setDraft(d => ({ ...d, stars: d.stars.filter(s => s.id !== sel.id) }));
+    } else {
+      return; // exit & ballstart are permanent fixtures
+    }
+    setSelected(null);
+  }, [pushHistory]);
 
   // Keyboard: Ctrl+Z/Ctrl+Y undo/redo, Esc → select tool, Delete/Backspace → remove selection, V/E shortcuts
   useEffect(() => {
@@ -701,7 +735,8 @@ export const LevelEditor: React.FC<LevelEditorProps> = ({
       updatedAt: now,
       config: draftToLevelConfig(working)
     };
-    setLibrary(upsertUserLevel(entry));
+    const { list, ok } = upsertUserLevel(entry);
+    setLibrary(list);
     setDraft(d => ({
       ...d,
       libraryId: entry.id,
@@ -709,7 +744,11 @@ export const LevelEditor: React.FC<LevelEditorProps> = ({
       code: working.code,
       name: entry.name
     }));
-    window.alert(`已保存「${entry.name}」到我的关卡库。`);
+    window.alert(
+      ok
+        ? `已保存「${entry.name}」到我的关卡库。`
+        : `「${entry.name}」保存失败：浏览器存储空间不足或不可用，请清理空间后重试。`
+    );
   }, [library]);
 
   const handlePlaytest = useCallback(() => {
@@ -779,8 +818,10 @@ export const LevelEditor: React.FC<LevelEditorProps> = ({
 
   const handleDeleteEntry = useCallback((entry: StoredUserLevel) => {
     if (!window.confirm(`删除「${entry.name}」？该操作不可撤销。`)) return;
-    setLibrary(deleteUserLevel(entry.id));
+    const { list, ok } = deleteUserLevel(entry.id);
+    setLibrary(list);
     setDraft(d => (d.libraryId === entry.id ? { ...d, libraryId: null } : d));
+    if (!ok) window.alert('删除操作未能写入存储（存储空间不足或不可用），刷新后可能恢复。');
   }, []);
 
   const patchDraft = useCallback(
