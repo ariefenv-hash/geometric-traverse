@@ -67,10 +67,14 @@ export const VictoryModal: React.FC<VictoryModalProps> = ({
   if (!isOpen) return null;
   const isDark = theme === 'dark';
 
-  const isParRotationsMet = rotationsTaken <= level.parRotations;
   const isFinalLevel = !hasNextLevel && level.id === 17;
   const rating = stats?.rating ?? 'B';
   const ratingStyle = RATING_STYLE[rating];
+
+  // Record-breaking: only a genuine break (a previous best existed) counts.
+  const brokeMoves = !!stats && stats.isNewBestRotations && stats.prevBestRotations > 0;
+  const brokeTime = !!stats && stats.isNewBestTime && stats.prevBestTime > 0;
+  const isRecord = brokeMoves || brokeTime;
 
   const isEndgame = isFinalLevel && campaignStats.completedCount >= campaignStats.totalLevels;
 
@@ -137,18 +141,45 @@ export const VictoryModal: React.FC<VictoryModalProps> = ({
           </div>
         </div>
 
+        {/* Record-break celebration: gold banner, shine sweep, geometric confetti */}
+        {isRecord && stats && (
+          <div className="relative overflow-hidden rounded-xl border border-amber-400/50 bg-gradient-to-r from-amber-500/15 via-amber-400/25 to-amber-500/15 px-4 py-3 mb-4 record-shine">
+            <div className="absolute inset-0 pointer-events-none" aria-hidden="true">
+              {RECORD_CONFETTI.map((style, i) => (
+                <span key={i} className="record-confetti-piece" style={style} />
+              ))}
+            </div>
+            <div className="relative flex flex-wrap items-center justify-center gap-x-2 gap-y-0.5">
+              <Trophy className="w-4 h-4 text-amber-300 drop-shadow-[0_0_8px_rgba(251,191,36,0.7)]" />
+              <span className="font-display font-extrabold text-sm tracking-[0.3em] text-amber-300 animate-star-pop">
+                新纪录
+              </span>
+              <span className="text-[11px] font-medium text-amber-200/85">
+                {brokeMoves && brokeTime
+                  ? `少 ${stats.prevBestRotations - rotationsTaken} 步 · 快 ${(stats.prevBestTime - elapsedTime).toFixed(1)}s`
+                  : brokeMoves
+                  ? `比上次最佳少 ${stats.prevBestRotations - rotationsTaken} 步`
+                  : `比上次最佳快 ${(stats.prevBestTime - elapsedTime).toFixed(1)}s`}
+              </span>
+            </div>
+          </div>
+        )}
+
         {/* Editorial Performance Metrics */}
         <div className="grid grid-cols-3 gap-2 p-4 rounded-xl border border-stone-800/60 dark:border-stone-800 light:border-stone-200 bg-stone-950/40 dark:bg-stone-950/40 light:bg-stone-50/80 mb-4">
           <div>
             <div className="text-[11px] text-stone-400 font-medium">旋转步数</div>
-            <div className="text-lg font-mono-tabular font-bold mt-0.5">
-              <span className={isParRotationsMet ? 'text-emerald-400' : 'text-stone-200 dark:text-stone-100 light:text-stone-900'}>
-                {rotationsTaken}
-              </span>
-              <span className="text-[10px] text-stone-500 font-normal"> / {level.parRotations}</span>
+            <div className="text-lg font-mono-tabular font-bold mt-0.5 text-stone-100 dark:text-stone-100 light:text-stone-900">
+              {rotationsTaken}
             </div>
-            <div className={`text-[10px] mt-0.5 ${stats?.isNewBestRotations && lvlHasPrev(stats) ? 'text-amber-300' : isParRotationsMet ? 'text-emerald-400' : 'text-stone-500'}`}>
-              {stats?.isNewBestRotations && lvlHasPrev(stats) ? '新纪录！' : isParRotationsMet ? '达成极简标准' : `最佳 ${stats?.prevBestRotations ?? '—'}`}
+            <div className="text-[10px] mt-0.5">
+              {stats?.isNewBestRotations && stats.prevBestRotations > 0 ? (
+                <span className="text-amber-300">新纪录</span>
+              ) : stats && stats.prevBestRotations > 0 ? (
+                <span className="text-stone-500">最佳 {stats.prevBestRotations}</span>
+              ) : (
+                <span className="text-stone-500">首个记录</span>
+              )}
             </div>
           </div>
 
@@ -157,8 +188,14 @@ export const VictoryModal: React.FC<VictoryModalProps> = ({
             <div className="text-lg font-mono-tabular font-bold text-stone-100 dark:text-stone-100 light:text-stone-900 mt-0.5">
               {elapsedTime.toFixed(1)}s
             </div>
-            <div className={`text-[10px] mt-0.5 ${stats?.isNewBestTime && lvlHasPrev(stats) ? 'text-amber-300' : 'text-stone-500'}`}>
-              {stats?.isNewBestTime && lvlHasPrev(stats) ? '新纪录！' : `参考 ${level.parTime}s`}
+            <div className="text-[10px] mt-0.5">
+              {stats?.isNewBestTime && stats.prevBestTime > 0 ? (
+                <span className="text-amber-300">新纪录</span>
+              ) : stats && stats.prevBestTime > 0 ? (
+                <span className="text-stone-500">最佳 {stats.prevBestTime.toFixed(1)}s</span>
+              ) : (
+                <span className="text-stone-500">首个记录</span>
+              )}
             </div>
           </div>
 
@@ -274,7 +311,25 @@ export const VictoryModal: React.FC<VictoryModalProps> = ({
   );
 };
 
-/** True when a prior best existed (prev > 0 means the record line is a broken record, not a first set). */
-function lvlHasPrev(stats: VictoryStats): boolean {
-  return stats.prevBestRotations > 0 || stats.prevBestTime > 0;
-}
+/* One-shot geometric confetti burst for the record banner — deterministic
+   (seeded by index) so re-renders never re-shuffle the pattern. */
+const CONFETTI_COLORS = ['#fbbf24', '#34d399', '#38bdf8', '#fef3c7'];
+const RECORD_CONFETTI: React.CSSProperties[] = Array.from({ length: 18 }, (_, i) => {
+  const angle = (i / 18) * Math.PI * 2 + (i % 3) * 0.38;
+  const dist = 44 + (i % 4) * 24;
+  const tx = Math.cos(angle) * dist;
+  const ty = Math.sin(angle) * dist * 0.7 - 12;
+  const rot = 130 + i * 103;
+  const s = 5 + (i % 3) * 2;
+  const shape = i % 3; // 0 diamond, 1 bar, 2 triangle
+  const base: React.CSSProperties = {
+    '--tx': `${tx.toFixed(1)}px`,
+    '--ty': `${ty.toFixed(1)}px`,
+    '--rot': `${rot}deg`,
+    background: CONFETTI_COLORS[i % CONFETTI_COLORS.length],
+    animationDelay: `${(i % 5) * 35}ms`
+  } as React.CSSProperties;
+  if (shape === 0) return { ...base, width: s, height: s, borderRadius: 1 };
+  if (shape === 1) return { ...base, width: 3, height: s + 5 };
+  return { ...base, width: s + 3, height: s + 3, clipPath: 'polygon(50% 0, 0 100%, 100% 100%)' };
+});

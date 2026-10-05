@@ -1435,8 +1435,10 @@ export const LevelEditor: React.FC<LevelEditorProps> = ({
               <TextInput label="副标题" value={draft.subtitle} onChange={v => patchDraft({ subtitle: v })} />
               <TextInput label="题记诗行" value={draft.poem} onChange={v => patchDraft({ poem: v })} area />
               <TextInput label="玩法说明" value={draft.instruction} onChange={v => patchDraft({ instruction: v })} area />
-              <NumInput label="标准旋转步数" value={draft.parRotations} onChange={v => patchDraft({ parRotations: Math.max(1, Math.round(v)) })} />
-              <NumInput label="标准用时(秒)" value={draft.parTime} onChange={v => patchDraft({ parTime: Math.max(5, Math.round(v)) })} />
+              {/* parRotations/parTime intentionally not editable here: the
+                  move-budget standard was removed from the campaign UI — it
+                  is technique-heavy and fixed budgets read as noise. The
+                  fields survive in saved level codes for compatibility. */}
             </div>
 
             {/* Arena size */}

@@ -46,10 +46,11 @@ export const DEFAULT_PHYSICS_PARAMS: PhysicsParams = {
 
 /** Seconds the death explosion plays before the ball respawns. */
 const DEATH_RESPAWN_DELAY = 0.9;
-/** Shorter respawn wait once the player has died 3+ times on the same attempt. */
+/** Shorter respawn wait once the player has died 2+ times on the same attempt —
+    gets you back into the action faster without a single added hazard. */
 const DEATH_RESPAWN_DELAY_FRENZY = 0.55;
 /** Post-respawn hazard immunity (seconds) — blink shield communicates it. */
-const RESPAWN_GRACE = 1.2;
+const RESPAWN_GRACE = 1.4;
 /** Exponential ease rate (1/s) for gravityAngle → targetAngle. ~90% in 0.13s. */
 const GRAVITY_EASE_RATE = 18;
 
@@ -883,7 +884,7 @@ export function updatePhysics(
   if (state.status === 'dying') {
     state.deathTimer += dt;
     updateEffects(state, dt);
-    if (state.deathTimer >= (state.deathCount >= 3 ? DEATH_RESPAWN_DELAY_FRENZY : DEATH_RESPAWN_DELAY)) {
+    if (state.deathTimer >= (state.deathCount >= 2 ? DEATH_RESPAWN_DELAY_FRENZY : DEATH_RESPAWN_DELAY)) {
       respawnBall(state);
     }
     return;
@@ -1109,6 +1110,11 @@ export function updatePhysics(
   }
 
   // 7. Check Exit Monolith
+  // Zero-star designs (the editor allows requiredStars: 0) never pass through
+  // the collect branch above, so open their gate here once.
+  if (!state.exit.unlocked && state.exit.requiredStars === 0) {
+    state.exit.unlocked = true;
+  }
   if (state.exit.unlocked) {
     const exitDist = Math.hypot(state.ball.x - state.exit.x, state.ball.y - state.exit.y);
     if (exitDist < state.ball.radius + state.exit.radius - 2) {

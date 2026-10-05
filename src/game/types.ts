@@ -275,7 +275,9 @@ export interface LevelProgress {
   starsEarned: number;
   bestRotations: number;
   bestTime: number;
-  /** Prism rating: S = ≤ par with zero deaths; A = near-par & few deaths; B = cleared. */
+  /** Prism rating: S = zero deaths; A = cleared with a few deaths; B = cleared.
+      Assist mode caps at A. Intentionally independent of move counts —
+      the game is technique-heavy, so a fixed step budget is meaningless. */
   bestRating?: PrismRating;
   /** Fewest deaths recorded for this level (0 = flawless). */
   bestDeaths?: number;

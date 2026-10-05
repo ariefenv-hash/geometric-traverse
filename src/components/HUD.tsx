@@ -111,7 +111,7 @@ export const HUD: React.FC<HUDProps> = ({
     };
   }, [assistOpen]);
   const assistActive = assist.lowGravity || assist.safeHazards;
-  const suggestAssist = deathsCount >= 4 && !assistActive;
+  const suggestAssist = deathsCount >= 3 && !assistActive;
 
   return (
     <header className="w-full flex items-center justify-between px-4 md:px-8 py-3.5 border-b border-stone-800/60 dark:border-stone-800/80 light:border-stone-200 select-none z-20 bg-stone-950/80 dark:bg-stone-950/85 light:bg-white/85 backdrop-blur-md">
@@ -155,9 +155,9 @@ export const HUD: React.FC<HUDProps> = ({
         <span aria-hidden="true" className="text-stone-600 dark:text-stone-700 light:text-stone-300 hidden sm:inline">·</span>
 
         {/* Rotations Count */}
-        <div className="font-mono-tabular" title="当前旋转步数 / 标准参考步数">
+        <div className="font-mono-tabular" title="本次旋转步数">
           <span className="text-stone-100 dark:text-stone-100 light:text-stone-900 font-semibold">{rotationsCount}</span>
-          <span className="text-stone-500 dark:text-stone-500 light:text-stone-400"> / {currentLevel.parRotations} 步</span>
+          <span className="text-stone-500 dark:text-stone-500 light:text-stone-400"> 步</span>
         </div>
 
         <span aria-hidden="true" className="text-stone-600 dark:text-stone-700 light:text-stone-300 hidden sm:inline">·</span>

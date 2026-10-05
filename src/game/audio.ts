@@ -610,6 +610,47 @@ class SoundEngine {
       }
     }
   }
+
+  /**
+   * Record-break fanfare: a bright ascending sparkle arpeggio layered on top
+   * of playVictory() — fired only when a previous personal best was beaten.
+   */
+  public playRecordFanfare() {
+    if (this.isMuted) return;
+    this.initContext();
+    if (!this.ctx || !this.sfxGain) return;
+
+    // Eb5 → G5 → Bb5 → Eb6 → G6, accelerando upward shimmer
+    const notes = [622.25, 783.99, 932.33, 1244.51, 1567.98];
+    const now = this.ctx.currentTime;
+
+    notes.forEach((freq, idx) => {
+      if (!this.ctx || !this.sfxGain) return;
+      const t0 = now + 0.18 + idx * 0.07;
+      const osc = this.ctx.createOscillator();
+      const gain = this.ctx.createGain();
+
+      osc.type = 'triangle';
+      osc.frequency.setValueAtTime(freq, t0);
+
+      gain.gain.setValueAtTime(0, t0);
+      gain.gain.linearRampToValueAtTime(0.09, t0 + 0.015);
+      gain.gain.exponentialRampToValueAtTime(0.0004, t0 + 0.5);
+
+      osc.connect(gain);
+      gain.connect(this.sfxGain);
+      osc.start(t0);
+      osc.stop(t0 + 0.55);
+    });
+
+    if (typeof navigator !== 'undefined' && 'vibrate' in navigator) {
+      try {
+        navigator.vibrate([18, 40, 18, 40, 18, 40, 60]);
+      } catch {
+        // Ignored
+      }
+    }
+  }
 }
 
 export const sound = new SoundEngine();

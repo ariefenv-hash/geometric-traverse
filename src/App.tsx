@@ -262,16 +262,15 @@ export default function App() {
           : Math.min(lvlProgress.bestTime, ws.elapsedTime);
         const deathsTaken = ws.deathCount;
 
-        // Prism rating: S = at/below par with a flawless run, A = close to
-        // par with at most a couple of deaths, B = cleared. Lower rank loses.
-        // Assist mode caps the rating at A — S is reserved for unaided runs.
+        // Prism rating is decoupled from move counts — this game is
+        // technique-heavy, so a fixed step budget is meaningless noise.
+        // S = flawless (zero deaths), A = cleared with a few deaths,
+        // B = cleared. Assist mode still caps the rating at A.
         const assistOn = !!(ws.assist?.lowGravity || ws.assist?.safeHazards);
+        const baseRating: PrismRating =
+          deathsTaken === 0 ? 'S' : deathsTaken <= 3 ? 'A' : 'B';
         const rating: PrismRating =
-          ws.movesCount <= currentLevel.parRotations && deathsTaken === 0 && !assistOn
-            ? 'S'
-            : ws.movesCount <= Math.ceil(currentLevel.parRotations * 1.4) && deathsTaken <= 2
-            ? 'A'
-            : 'B';
+          assistOn && baseRating === 'S' ? 'A' : baseRating;
         const rankOf = { S: 3, A: 2, B: 1 } as const;
         const bestRating: PrismRating = !lvlProgress.bestRating
           ? rating
@@ -316,6 +315,10 @@ export default function App() {
         const before = getUnlockedSkinIds(getUnlockStats(prev, maxStarsTotal, LEVELS.length));
         const after = getUnlockedSkinIds(getUnlockStats(updated, maxStarsTotal, LEVELS.length));
         const newlyId = after.find(id => !before.includes(id) && getSkinMeta(id)?.unlock);
+        const brokeBestRotations =
+          lvlProgress.bestRotations > 0 && ws.movesCount < lvlProgress.bestRotations;
+        const brokeBestTime =
+          lvlProgress.bestTime > 0 && ws.elapsedTime < lvlProgress.bestTime;
         setVictoryStats({
           deathsTaken,
           rating,
@@ -326,6 +329,12 @@ export default function App() {
           prevBestTime: lvlProgress.bestTime,
           unlockedSkin: newlyId ? getSkinMeta(newlyId) : null
         });
+
+        // Record actually BROKEN (a previous best existed): layer the
+        // ascending fanfare on top of the victory chord.
+        if (brokeBestRotations || brokeBestTime) {
+          sound.playRecordFanfare();
+        }
 
         saveLevelProgress(updated);
         setProgress(updated);
