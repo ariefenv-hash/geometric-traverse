@@ -11,6 +11,7 @@
  */
 
 import { SKIN_ART } from './skinArt';
+import { LevelProgress } from './types';
 
 export const SKIN_STORAGE_KEY = 'gt_ball_skin_v1';
 
@@ -29,6 +30,30 @@ export interface BallSkinInfo {
   desc: string;
   /** Accent color used for selection highlights in the picker. */
   accent: string;
+  /** Achievement gate: when present, the skin unlocks only after `test` passes. */
+  unlock?: SkinUnlock;
+}
+
+/** Campaign stats aggregate used to evaluate skin unlock predicates. */
+export interface UnlockStats {
+  /** Sum of starsEarned across all official levels. */
+  totalStars: number;
+  /** Sum of stars obtainable across all official levels. */
+  maxTotalStars: number;
+  /** Number of levels whose bestRating === 'S'. */
+  sRatings: number;
+  /** Number of completed official levels. */
+  completedCount: number;
+  /** Total official levels. */
+  totalLevels: number;
+}
+
+export interface SkinUnlock {
+  /** Short label shown on the locked card, e.g. '星核共鸣 18'. */
+  label: string;
+  /** Longer condition explanation shown in the picker footer / unlock toast. */
+  hint: string;
+  test: (stats: UnlockStats) => boolean;
 }
 
 /** The original procedural ball (renderer steps 4-7). Always available. */
@@ -58,7 +83,12 @@ export const BALL_SKINS: BallSkinInfo[] = [
   {
     id: 'sacred', num: '05', en: 'SACRED', type: 'Merkaba',
     name: '梅卡巴神圣几何球', accent: '#b388ff',
-    desc: '正二十面体与星形四面体嵌套，包含完美比例对偶线。'
+    desc: '正二十面体与星形四面体嵌套，包含完美比例对偶线。',
+    unlock: {
+      label: '星核共鸣 18',
+      hint: '累计搜集 18 颗星核后解锁',
+      test: s => s.totalStars >= 18
+    }
   },
   {
     id: 'stratum', num: '06', en: 'STRATUM', type: 'Contour Slice',
@@ -78,14 +108,53 @@ export const BALL_SKINS: BallSkinInfo[] = [
   {
     id: 'aperture', num: '09', en: 'APERTURE', type: 'Mechanical',
     name: '精密机械光圈叶球', accent: '#f3c969',
-    desc: '钟表齿圈驱动的八瓣切线旋转遮光叶片系统。'
+    desc: '钟表齿圈驱动的八瓣切线旋转遮光叶片系统。',
+    unlock: {
+      label: '棱镜评级 S × 5',
+      hint: '在任意 5 个维度取得 S 级棱镜评级后解锁',
+      test: s => s.sRatings >= 5
+    }
   },
   {
     id: 'voronoi', num: '10', en: 'VORONOI', type: 'Cellular',
     name: '泰森多边形有机球', accent: '#b388ff',
-    desc: '依曲率向边缘紧缩的自然仿生多胞网格结构。'
+    desc: '依曲率向边缘紧缩的自然仿生多胞网格结构。',
+    unlock: {
+      label: '贯穿全部维度',
+      hint: '通关全部 17 个官方维度后解锁',
+      test: s => s.completedCount >= s.totalLevels
+    }
   }
 ];
+
+/** Aggregate campaign stats from a progress map (tolerates missing entries). */
+export function getUnlockStats(
+  progress: Record<number, LevelProgress>,
+  maxTotalStars: number,
+  totalLevels: number
+): UnlockStats {
+  let totalStars = 0;
+  let sRatings = 0;
+  let completedCount = 0;
+  for (const key of Object.keys(progress)) {
+    const p = progress[Number(key)];
+    if (!p) continue;
+    totalStars += p.starsEarned || 0;
+    if (p.bestRating === 'S') sRatings += 1;
+    if (p.completed) completedCount += 1;
+  }
+  return { totalStars, maxTotalStars, sRatings, completedCount, totalLevels };
+}
+
+/** A skin is usable when it has no unlock gate or the gate predicate passes. */
+export function isSkinUnlocked(skin: BallSkinInfo, stats: UnlockStats): boolean {
+  return !skin.unlock || skin.unlock.test(stats);
+}
+
+/** Skins whose unlock predicate turns true for the given stats. */
+export function getUnlockedSkinIds(stats: UnlockStats): string[] {
+  return BALL_SKINS.filter(s => isSkinUnlocked(s, stats)).map(s => s.id);
+}
 
 /** Metadata for a persisted id; unknown ids resolve to null (caller falls back). */
 export function getSkinMeta(id: string): BallSkinInfo | null {
@@ -96,6 +165,20 @@ export function getSkinMeta(id: string): BallSkinInfo | null {
 export function getSkinSvg(id: string): string | null {
   const idx = BALL_SKINS.findIndex(s => s.id === id);
   return idx >= 0 ? SKIN_ART[idx] ?? null : null;
+}
+
+/** Classic procedural ball's halo accent (the original sky-400 look). */
+export const CLASSIC_ACCENT = '#38bdf8';
+
+/**
+ * Accent color of the currently selected skin, for unifying the ball's aura,
+ * trail and satellite glow with the equipped artwork. Falls back to the
+ * classic sky tone for the procedural ball or unknown ids.
+ */
+export function getSelectedSkinAccent(): string {
+  const id = getSelectedSkinId();
+  if (id === CLASSIC_SKIN_ID) return CLASSIC_ACCENT;
+  return getSkinMeta(id)?.accent ?? CLASSIC_ACCENT;
 }
 
 // ---------------------------------------------------------------------------

@@ -287,6 +287,11 @@ export const LEVELS: LevelConfig[] = [
     subtitle: 'Levitation Well',
     poem: '逆流而上，在深渊的井口感知反重力的温柔托举。',
     instruction: '蓝色引力涌泉将向上推升小球。巧妙借助反重力在深井中跃升。',
+    hints: [
+      '蓝色涌泉区域会持续向上托举小球：重力向下时走进井里，球反而会升起。',
+      '深井中央是快速通道：先落到井口借反重力升到高处，再旋转让球飞向目标侧。',
+      '在涌泉中旋转重力会显著改变飞行轨迹，落地前预留一点调整余量。'
+    ],
     arenaWidth: 800,
     arenaHeight: 800,
     ballStart: { x: 120, y: 700 },
@@ -328,6 +333,11 @@ export const LEVELS: LevelConfig[] = [
     subtitle: 'Quantum Rift',
     poem: '空间不过是一张对折的纸，两端在相触时本为一体。',
     instruction: '紫光折跃门相连互通，携带速度瞬间穿越至隔绝的异维空间。',
+    hints: [
+      '同色传送门成对工作：进入一端，立刻从另一端飞出，速度方向保持不变。',
+      '出口速度 = 入口速度，所以“用什么姿态冲进门”决定了“以什么轨迹飞出去”。',
+      '穿门后有短促冷却保护，不会被立即弹回，放心规划下一段路线。'
+    ],
     arenaWidth: 800,
     arenaHeight: 800,
     ballStart: { x: 140, y: 140 },
@@ -414,6 +424,11 @@ export const LEVELS: LevelConfig[] = [
     subtitle: 'Tetra-Labyrinth',
     poem: '四相更迭流转，每一次凝视，都在重构整个宇宙的形态。',
     instruction: '每一次 90° 旋转都会改变四相门的固液形态，按顺序解开多重视界。',
+    hints: [
+      '这一关是相界的组合拳：每条相界的虚实由重力方向决定，逐一记住它们的方向。',
+      '迷路时按 R 重开成本很低——机关布局复原，但你的路线记忆还在。',
+      '先规划完整路线再动手：数一数需要几次旋转，避免无用的来回翻转。'
+    ],
     arenaWidth: 800,
     arenaHeight: 800,
     ballStart: { x: 400, y: 400 },
@@ -491,6 +506,11 @@ export const LEVELS: LevelConfig[] = [
     subtitle: 'Gravitational Synchrony',
     poem: '多重法则彼此纠缠，唯有心止如水方能探寻唯一的通路。',
     instruction: '协同激光、移动盾牌与引力涌泉，精准把握动量与转向时机。',
+    hints: [
+      '反重力井推力很强，小球飞进井里会急速上升，留意屋顶碰撞。',
+      '滑块可以推进激光光路做盾牌；先护住一条安全走廊，再借反重力井攀升。',
+      '在井中上升时无法转向躲避光束——务必先断光，再升空。'
+    ],
     arenaWidth: 800,
     arenaHeight: 800,
     ballStart: { x: 120, y: 680 },
@@ -577,6 +597,11 @@ export const LEVELS: LevelConfig[] = [
     subtitle: 'Apex Horizon',
     poem: '穿越所有维度的折叠与贯穿，在此与最初的几何灵韵重逢。',
     instruction: '集大全之作：在超空间折叠中调和多重物理定律，完成最终几何贯穿！',
+    hints: [
+      '出生盒底部中央有一段虚线相界：重力竖直时（上/下）它可穿透，是盒子的正门。',
+      '顶部三颗星核在纵激光附近：从侧面贴近用球体边缘收集，别让球心正对光束。',
+      '滑动盾牌可以遮断纵激光；先立盾，再取星核，最后经传送门与相界奔向出口。'
+    ],
     arenaWidth: 800,
     arenaHeight: 800,
     ballStart: { x: 400, y: 400 },
@@ -584,7 +609,7 @@ export const LEVELS: LevelConfig[] = [
     stars: [
       { id: 's1', x: 140, y: 140, radius: 11, collected: false, pulsePhase: 0 },
       { id: 's2', x: 660, y: 140, radius: 11, collected: false, pulsePhase: 1.5 },
-      { id: 's3', x: 400, y: 140, radius: 11, collected: false, pulsePhase: 3.0 }
+      { id: 's3', x: 480, y: 140, radius: 11, collected: false, pulsePhase: 3.0 }
     ],
     obstacles: [
       // Double intersecting lasers
@@ -708,6 +733,11 @@ export const LEVELS: LevelConfig[] = [
     subtitle: 'Bounce Gallery',
     poem: '翠色的垫石铭记着方向，坠落亦可化作升腾的起点。',
     instruction: '翠色弹力垫会将小球沿箭头方向高速弹射，配合重力翻转搭建弹射路径。',
+    hints: [
+      '翠色弹力垫的箭头指向弹射方向，弹射速度固定，落点由旋转时机决定。',
+      '中央大垫向上弹射：重力向下时踏上它会被高高抛起，在空中旋转即可飞向两侧高台。',
+      '本关球的弹性被调低，落地更粘更稳，大胆利用连续弹射。'
+    ],
     arenaWidth: 800,
     arenaHeight: 800,
     ballStart: { x: 120, y: 680 },
@@ -740,6 +770,11 @@ export const LEVELS: LevelConfig[] = [
     subtitle: 'Wallbreaker',
     poem: '顽石亦有裂痕，蓄满动量的一击是穿越壁垒的唯一语言。',
     instruction: '赭色裂纹墙会被高速冲击击碎。翻转重力为小球蓄力，撞破两道脆壁抵达彼岸。',
+    hints: [
+      '脆壁只认速度：冲击速度超过阈值才会开裂，两段蓄力距离越长威力越大。',
+      '从远处让它自由落体，坠落速度自然达标；短距轻碰是砸不开的。',
+      '每道脆壁可承受两次重击，撞击时会有裂纹反馈，打空了就拉开距离再来。'
+    ],
     arenaWidth: 800,
     arenaHeight: 800,
     ballStart: { x: 120, y: 400 },
@@ -769,6 +804,11 @@ export const LEVELS: LevelConfig[] = [
     subtitle: 'One-Way Current',
     poem: '涡流只记得一个方向，归途永远藏在另一条走廊的尽头。',
     instruction: '单向闸门只允许小球沿箭头方向穿越。顺流而下易，逆流而上需另寻通路。',
+    hints: [
+      '单向门只放行顺箭头方向的运动，逆向会被弹回，是不可逾越的隔断。',
+      '被弹回不扣步数也不扣分，把它们当作固定墙重新规划路线即可。',
+      '几扇单向门构成环形涡流：顺着箭头的方向绕行，比硬闯更快。'
+    ],
     arenaWidth: 800,
     arenaHeight: 800,
     ballStart: { x: 400, y: 120 },
@@ -806,6 +846,11 @@ export const LEVELS: LevelConfig[] = [
     subtitle: 'Weighted Verdict',
     poem: '重量是无声的钥匙，落于石板之上，沉睡的门扉便会苏醒。',
     instruction: '紫色压力板感应小球重量并联动同色闸门。带菱形纹的压力板一经触发将永久锁存。',
+    hints: [
+      '压板被球压住时联动门开启；带卡扣的压板（本关两款都是）压过一次就永久开启。',
+      '先看门锁位置：每扇联动门都对应一块压板，规划“顺路踩板”的顺序。',
+      '两块压板都在顺路位置上，一次完整的重力巡回即可全部点亮。'
+    ],
     arenaWidth: 800,
     arenaHeight: 800,
     ballStart: { x: 150, y: 560 },
@@ -842,6 +887,11 @@ export const LEVELS: LevelConfig[] = [
     subtitle: 'Grand Unification',
     poem: '弹射、碎裂、单向与权衡，所有法则在此和弦中共鸣。',
     instruction: '集大成试炼：弹力垫升空、往复撞击破壁、压板开启终门，完成最终几何贯穿！',
+    hints: [
+      '地面两侧是湮灭场：落脚与弹射起飞位置都要避开，中央通道是安全区。',
+      '流程：踩中央弹力垫升空 → 反复撞碎上方脆壁 → 落入顶廊踩压板 → 穿门进终点。',
+      '左下角星核紧挨湮灭场边缘，从中央用微冲横移过去拿，别大幅旋转。'
+    ],
     arenaWidth: 800,
     arenaHeight: 800,
     ballStart: { x: 400, y: 700 },
@@ -864,9 +914,12 @@ export const LEVELS: LevelConfig[] = [
       // Exit chamber: linked gate opened by latched plate on the corridor floor
       { id: 'lg_exit', type: 'linked_gate', x: 340, y: 140, width: 120, height: 20 },
       { id: 'pp_exit', type: 'pressure_plate', x: 660, y: 176, width: 100, height: 20, linkId: 'lg_exit', latch: true },
-      // Hazard pits punish sloppy landings on the ground floor
-      { id: 'hz1', type: 'hazard', x: 0, y: 770, width: 240, height: 30 },
-      { id: 'hz2', type: 'hazard', x: 560, y: 770, width: 240, height: 30 }
+      // Hazard pits punish sloppy landings on the ground floor. Narrowed from
+      // 240px to 180px each: the old slabs reached flush into the launch corridor
+      // and brushed the low-left star's pickup radius, demanding near-pixel
+      // perfect positioning on an otherwise mid-difficulty finale.
+      { id: 'hz1', type: 'hazard', x: 0, y: 770, width: 180, height: 30 },
+      { id: 'hz2', type: 'hazard', x: 620, y: 770, width: 180, height: 30 }
     ],
     parRotations: 8,
     parTime: 40
@@ -880,6 +933,11 @@ export const LEVELS: LevelConfig[] = [
     subtitle: 'Mirror Gallery',
     poem: '光在银色的折痕间三度转身，唯有一列静默的竖井未被打扰。',
     instruction: '银色反射镜会按入射角折返激光，发射器亦可斜向发光。读懂折叠的光路，沿未被照耀的回廊抵达归元之门。',
+    hints: [
+      '发射器是斜向的：光束先在竖镜上折返，再经地板镜折返，最后射向右侧。',
+      '银色镜面按“入射角 = 反射角”折光，跟随光路走就能找出被照耀的区域。',
+      '左侧竖井与底部角落未被光路覆盖——沿这些暗影走廊移动最安全。'
+    ],
     arenaWidth: 800,
     arenaHeight: 800,
     ballStart: { x: 140, y: 700 },
@@ -918,6 +976,11 @@ export const LEVELS: LevelConfig[] = [
     subtitle: 'One-Way Silver',
     poem: '银膜只朝一侧微笑，另一侧的光径直穿过，落成第二条暗河。',
     instruction: '这面反射镜只在一侧镀银：镀银侧照常折返激光，玻璃侧的光则径直穿过。认出箭头所指的银面，沿被放行的暗影走廊抵达归元之门。',
+    hints: [
+      '两面镜子分工不同：竖镜只在一侧镀银（背面折光、正面放行），地板镜两面都折光。',
+      '两条交叉光束间存在安全走廊：贴左侧墙下行、沿底部地板横移、贴顶棚飞行。',
+      '顶棚星核在光束交汇区之外：沿安全走廊贴近后，用球体边缘轻碰收集。'
+    ],
     arenaWidth: 800,
     arenaHeight: 800,
     ballStart: { x: 140, y: 700 },

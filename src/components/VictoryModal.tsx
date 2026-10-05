@@ -1,12 +1,25 @@
 import React, { useEffect } from 'react';
-import { Star, ArrowRight, RotateCcw, Grid, Award } from 'lucide-react';
-import { LevelConfig, ThemeMode } from '../game/types';
+import { Star, ArrowRight, RotateCcw, Grid, Award, Trophy, Skull, Sparkles } from 'lucide-react';
+import { LevelConfig, PrismRating, ThemeMode } from '../game/types';
+import { UnlockStats } from '../game/skins';
+
+/** Per-victory bookkeeping computed in App against the pre-save progress. */
+export interface VictoryStats {
+  deathsTaken: number;
+  rating: PrismRating;
+  isNewBestRotations: boolean;
+  isNewBestTime: boolean;
+  prevBestRotations: number;
+  prevBestTime: number;
+  unlockedSkin: { id: string; name: string; accent: string; unlockHint?: string } | null;
+}
 
 interface VictoryModalProps {
   level: LevelConfig;
   starsEarned: number;
   rotationsTaken: number;
   elapsedTime: number;
+  stats: VictoryStats | null;
   isOpen: boolean;
   onNextLevel: () => void;
   onReplay: () => void;
@@ -14,20 +27,30 @@ interface VictoryModalProps {
   /** Dismiss without any action (Esc / backdrop click). */
   onDismiss: () => void;
   hasNextLevel: boolean;
+  /** Aggregate campaign stats — powers the endgame ceremony on the final level. */
+  campaignStats: UnlockStats;
   theme: ThemeMode;
 }
+
+const RATING_STYLE: Record<PrismRating, { ring: string; text: string; label: string }> = {
+  S: { ring: 'border-amber-400/60 bg-amber-400/10 shadow-[0_0_24px_rgba(251,191,36,0.35)]', text: 'text-amber-300', label: '棱镜 S · 完美贯穿' },
+  A: { ring: 'border-sky-400/50 bg-sky-400/10', text: 'text-sky-300', label: '棱镜 A · 精准穿梭' },
+  B: { ring: 'border-stone-500/40 bg-stone-500/10', text: 'text-stone-300', label: '棱镜 B · 顺利通关' }
+};
 
 export const VictoryModal: React.FC<VictoryModalProps> = ({
   level,
   starsEarned,
   rotationsTaken,
   elapsedTime,
+  stats,
   isOpen,
   onNextLevel,
   onReplay,
   onOpenLevelSelect,
   onDismiss,
   hasNextLevel,
+  campaignStats,
   theme
 }) => {
   // Esc dismisses the victory overlay. Hooks must run before the early
@@ -45,6 +68,11 @@ export const VictoryModal: React.FC<VictoryModalProps> = ({
   const isDark = theme === 'dark';
 
   const isParRotationsMet = rotationsTaken <= level.parRotations;
+  const isFinalLevel = !hasNextLevel && level.id === 17;
+  const rating = stats?.rating ?? 'B';
+  const ratingStyle = RATING_STYLE[rating];
+
+  const isEndgame = isFinalLevel && campaignStats.completedCount >= campaignStats.totalLevels;
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-stone-950/85 backdrop-blur-md animate-fade-in">
@@ -53,7 +81,7 @@ export const VictoryModal: React.FC<VictoryModalProps> = ({
           ? 'bg-stone-900 border-stone-800 text-stone-100'
           : 'bg-white border-stone-200 text-stone-900'
       }`}>
-        
+
         {/* Subtle Decorative Geometry */}
         <div className="flex justify-center mb-2">
           <div className="w-10 h-10 rounded-full flex items-center justify-center bg-sky-500/10 text-sky-400 border border-sky-500/30">
@@ -78,7 +106,7 @@ export const VictoryModal: React.FC<VictoryModalProps> = ({
         )}
 
         {/* Animated Stars */}
-        <div className="flex items-center justify-center gap-4 my-6">
+        <div className="flex items-center justify-center gap-4 my-5">
           {[0, 1, 2].map((idx) => {
             const hasStar = idx < starsEarned;
             return (
@@ -101,19 +129,27 @@ export const VictoryModal: React.FC<VictoryModalProps> = ({
           })}
         </div>
 
+        {/* Prism Rating chip */}
+        <div className="flex justify-center mb-5">
+          <div className={`inline-flex items-center gap-2 px-4 py-1.5 rounded-full border ${ratingStyle.ring}`}>
+            <span className={`font-display font-extrabold text-lg ${ratingStyle.text}`}>{rating}</span>
+            <span className={`text-[11px] font-medium ${ratingStyle.text}`}>{ratingStyle.label}</span>
+          </div>
+        </div>
+
         {/* Editorial Performance Metrics */}
-        <div className="grid grid-cols-2 gap-3 p-4 rounded-xl border border-stone-800/60 dark:border-stone-800 light:border-stone-200 bg-stone-950/40 dark:bg-stone-950/40 light:bg-stone-50/80 mb-6">
+        <div className="grid grid-cols-3 gap-2 p-4 rounded-xl border border-stone-800/60 dark:border-stone-800 light:border-stone-200 bg-stone-950/40 dark:bg-stone-950/40 light:bg-stone-50/80 mb-4">
           <div>
             <div className="text-[11px] text-stone-400 font-medium">旋转步数</div>
             <div className="text-lg font-mono-tabular font-bold mt-0.5">
-              <span className={isParRotationsMet ? 'text-emerald-400' : 'text-stone-200'}>
+              <span className={isParRotationsMet ? 'text-emerald-400' : 'text-stone-200 dark:text-stone-100 light:text-stone-900'}>
                 {rotationsTaken}
               </span>
-              <span className="text-xs text-stone-500 font-normal"> / {level.parRotations} 步</span>
+              <span className="text-[10px] text-stone-500 font-normal"> / {level.parRotations}</span>
             </div>
-            {isParRotationsMet && (
-              <div className="text-[10px] text-emerald-400 mt-0.5">达成极简标准</div>
-            )}
+            <div className={`text-[10px] mt-0.5 ${stats?.isNewBestRotations && lvlHasPrev(stats) ? 'text-amber-300' : isParRotationsMet ? 'text-emerald-400' : 'text-stone-500'}`}>
+              {stats?.isNewBestRotations && lvlHasPrev(stats) ? '新纪录！' : isParRotationsMet ? '达成极简标准' : `最佳 ${stats?.prevBestRotations ?? '—'}`}
+            </div>
           </div>
 
           <div>
@@ -121,11 +157,78 @@ export const VictoryModal: React.FC<VictoryModalProps> = ({
             <div className="text-lg font-mono-tabular font-bold text-stone-100 dark:text-stone-100 light:text-stone-900 mt-0.5">
               {elapsedTime.toFixed(1)}s
             </div>
-            <div className="text-[10px] text-stone-500 mt-0.5">
-              参考 {level.parTime}s
+            <div className={`text-[10px] mt-0.5 ${stats?.isNewBestTime && lvlHasPrev(stats) ? 'text-amber-300' : 'text-stone-500'}`}>
+              {stats?.isNewBestTime && lvlHasPrev(stats) ? '新纪录！' : `参考 ${level.parTime}s`}
+            </div>
+          </div>
+
+          <div>
+            <div className="text-[11px] text-stone-400 font-medium">湮灭次数</div>
+            <div className="text-lg font-mono-tabular font-bold mt-0.5 flex items-center justify-center gap-1">
+              <Skull className={`w-3.5 h-3.5 ${(stats?.deathsTaken ?? 0) === 0 ? 'text-emerald-400' : 'text-rose-400'}`} />
+              <span className={(stats?.deathsTaken ?? 0) === 0 ? 'text-emerald-400' : 'text-stone-200 dark:text-stone-100 light:text-stone-900'}>
+                {stats?.deathsTaken ?? 0}
+              </span>
+            </div>
+            <div className="text-[10px] mt-0.5 text-stone-500">
+              {(stats?.deathsTaken ?? 0) === 0 ? '无伤贯穿' : '再接再厉'}
             </div>
           </div>
         </div>
+
+        {/* Historical best line (when a prior record exists and wasn't broken) */}
+        {stats && !stats.isNewBestRotations && stats.prevBestRotations > 0 && (
+          <div className="flex items-center justify-center gap-1.5 text-[11px] text-stone-500 mb-3">
+            <Trophy className="w-3 h-3 text-amber-400/70" />
+            <span>历史最佳 {stats.prevBestRotations} 步 · {stats.prevBestTime.toFixed(1)}s</span>
+          </div>
+        )}
+
+        {/* Skin unlock celebration */}
+        {stats?.unlockedSkin && (
+          <div className="flex items-center gap-2.5 px-4 py-2.5 rounded-xl border border-emerald-500/30 bg-emerald-500/10 mb-4 text-left">
+            <span
+              className="w-8 h-8 rounded-full shrink-0 border border-white/20"
+              style={{ background: `radial-gradient(circle at 32% 28%, #ffffff55, ${stats.unlockedSkin.accent})` }}
+            />
+            <div className="min-w-0">
+              <div className="text-xs font-semibold text-emerald-300 flex items-center gap-1">
+                <Sparkles className="w-3 h-3" />
+                解锁新皮肤 · {stats.unlockedSkin.name}
+              </div>
+              <div className="text-[10px] text-stone-400 truncate">
+                前往 HUD 的调色盘按钮即可装备
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Endgame ceremony: final dimension, campaign complete */}
+        {isEndgame && (
+          <div className="rounded-xl border border-amber-500/30 bg-amber-400/5 p-4 mb-4">
+            <div className="text-xs font-bold text-amber-300 tracking-wider mb-2 flex items-center justify-center gap-1.5">
+              <Sparkles className="w-3.5 h-3.5" />
+              全维度贯穿达成
+            </div>
+            <div className="grid grid-cols-3 gap-2 text-center">
+              <div>
+                <div className="text-lg font-mono-tabular font-bold text-amber-300">{campaignStats.completedCount}/{campaignStats.totalLevels}</div>
+                <div className="text-[10px] text-stone-400">维度通关</div>
+              </div>
+              <div>
+                <div className="text-lg font-mono-tabular font-bold text-amber-300">{campaignStats.totalStars}/{campaignStats.maxTotalStars}</div>
+                <div className="text-[10px] text-stone-400">星核共鸣</div>
+              </div>
+              <div>
+                <div className="text-lg font-mono-tabular font-bold text-amber-300">{campaignStats.sRatings}</div>
+                <div className="text-[10px] text-stone-400">棱镜 S 评级</div>
+              </div>
+            </div>
+            <div className="text-[10px] text-stone-400 mt-2.5 leading-relaxed">
+              几何的旅程不会终点：继续冲击全 S 评级，或前往沙盒实验室与几何工坊创造属于你的维度。
+            </div>
+          </div>
+        )}
 
         {/* Action Buttons */}
         <div className="flex flex-col gap-2.5">
@@ -170,3 +273,8 @@ export const VictoryModal: React.FC<VictoryModalProps> = ({
     </div>
   );
 };
+
+/** True when a prior best existed (prev > 0 means the record line is a broken record, not a first set). */
+function lvlHasPrev(stats: VictoryStats): boolean {
+  return stats.prevBestRotations > 0 || stats.prevBestTime > 0;
+}

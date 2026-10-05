@@ -36,7 +36,7 @@ export interface Particle {
   maxLife: number;
   size: number;
   color: string;
-  shape?: 'square' | 'line' | 'circle';
+  shape?: 'square' | 'line' | 'circle' | 'diamond' | 'triangle';
   angle?: number;
 }
 
@@ -267,12 +267,18 @@ export interface LevelConfig {
   hints?: string[];
 }
 
+export type PrismRating = 'S' | 'A' | 'B';
+
 export interface LevelProgress {
   unlocked: boolean;
   completed: boolean;
   starsEarned: number;
   bestRotations: number;
   bestTime: number;
+  /** Prism rating: S = ≤ par with zero deaths; A = near-par & few deaths; B = cleared. */
+  bestRating?: PrismRating;
+  /** Fewest deaths recorded for this level (0 = flawless). */
+  bestDeaths?: number;
 }
 
 export interface PhysicsWorldState {
@@ -281,6 +287,7 @@ export interface PhysicsWorldState {
   stars: StarItem[];
   exit: ExitGate;
   gravityAngle: number;
+  /** Player-intended gravity angle; physics eases gravityAngle toward it. */
   targetAngle: number;
   particles: Particle[];
   ripples: RippleEffect[];
@@ -295,6 +302,20 @@ export interface PhysicsWorldState {
   params: PhysicsParams;   // resolved runtime physics parameters
   /** Camera shake: decays over time, GameCanvas samples it for draw offset. */
   shake: CameraShake;
+  /** Total deaths since this level attempt started (drives assist nudges & ratings). */
+  deathCount: number;
+  /** Seconds of post-respawn hazard immunity left (also used for assist knockback i-frames). */
+  respawnGrace: number;
+  /** Assist-mode flags (set by App from persisted preferences). */
+  assist?: AssistFlags;
+}
+
+/** Assist-mode accessibility flags. */
+export interface AssistFlags {
+  /** 0.7× gravity scale — floatier, slower falls. */
+  lowGravity?: boolean;
+  /** Lethal hazards knock the ball away instead of killing it. */
+  safeHazards?: boolean;
 }
 
 /** Decaying impact camera shake (magnitude in px, duration in seconds). */

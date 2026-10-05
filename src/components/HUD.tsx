@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import {
   Grid,
   RotateCcw,
@@ -14,18 +14,27 @@ import {
   Vibrate,
   VibrateOff,
   Eraser,
-  Palette
+  Palette,
+  Skull,
+  LifeBuoy,
+  Gauge,
+  ShieldCheck
 } from 'lucide-react';
 import { LevelConfig, ThemeMode } from '../game/types';
+import { AssistPrefs } from '../game/settings';
 
 interface HUDProps {
   currentLevel: LevelConfig;
   starsCollected: number;
   rotationsCount: number;
   elapsedTime: number;
+  deathsCount: number;
   theme: ThemeMode;
   isMuted: boolean;
   isShakeOn: boolean;
+  assist: AssistPrefs;
+  onToggleAssistGravity: () => void;
+  onToggleAssistSafe: () => void;
   onToggleTheme: () => void;
   onToggleMute: () => void;
   onToggleShake: () => void;
@@ -43,9 +52,13 @@ export const HUD: React.FC<HUDProps> = ({
   starsCollected,
   rotationsCount,
   elapsedTime,
+  deathsCount,
   theme,
   isMuted,
   isShakeOn,
+  assist,
+  onToggleAssistGravity,
+  onToggleAssistSafe,
   onToggleTheme,
   onToggleMute,
   onToggleShake,
@@ -63,6 +76,42 @@ export const HUD: React.FC<HUDProps> = ({
   const minutes = Math.floor(elapsedTime / 60);
   const seconds = (elapsedTime % 60).toFixed(1);
   const formattedTime = `${String(minutes).padStart(2, '0')}:${seconds.padStart(4, '0')}`;
+
+  // Star-collect pop: when the collected count rises, pulse the newest star.
+  const prevStarsRef = useRef(starsCollected);
+  const [popIdx, setPopIdx] = useState(-1);
+  useEffect(() => {
+    if (starsCollected > prevStarsRef.current) {
+      setPopIdx(starsCollected - 1);
+      const t = setTimeout(() => setPopIdx(-1), 650);
+      prevStarsRef.current = starsCollected;
+      return () => clearTimeout(t);
+    }
+    prevStarsRef.current = starsCollected;
+  }, [starsCollected]);
+
+  // Assist popover
+  const [assistOpen, setAssistOpen] = useState(false);
+  const assistRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!assistOpen) return;
+    const onDown = (e: MouseEvent) => {
+      if (assistRef.current && !assistRef.current.contains(e.target as Node)) {
+        setAssistOpen(false);
+      }
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setAssistOpen(false);
+    };
+    window.addEventListener('mousedown', onDown);
+    window.addEventListener('keydown', onKey);
+    return () => {
+      window.removeEventListener('mousedown', onDown);
+      window.removeEventListener('keydown', onKey);
+    };
+  }, [assistOpen]);
+  const assistActive = assist.lowGravity || assist.safeHazards;
+  const suggestAssist = deathsCount >= 4 && !assistActive;
 
   return (
     <header className="w-full flex items-center justify-between px-4 md:px-8 py-3.5 border-b border-stone-800/60 dark:border-stone-800/80 light:border-stone-200 select-none z-20 bg-stone-950/80 dark:bg-stone-950/85 light:bg-white/85 backdrop-blur-md">
@@ -97,7 +146,7 @@ export const HUD: React.FC<HUDProps> = ({
                   isFilled
                     ? 'text-amber-400 fill-amber-400 scale-110 drop-shadow-[0_0_6px_rgba(251,191,36,0.6)]'
                     : 'text-stone-600 dark:text-stone-700 light:text-stone-300'
-                }`}
+                } ${idx === popIdx ? 'animate-star-pop' : ''}`}
               />
             );
           })}
@@ -117,11 +166,90 @@ export const HUD: React.FC<HUDProps> = ({
         <div className="font-mono-tabular hidden sm:block text-stone-300 dark:text-stone-300 light:text-stone-700">
           {formattedTime}
         </div>
+
+        {/* Death counter — surfaced only once it matters (zero visual noise on flawless runs) */}
+        {deathsCount > 0 && (
+          <>
+            <span aria-hidden="true" className="text-stone-600 dark:text-stone-700 light:text-stone-300 hidden sm:inline">·</span>
+            <div
+              className="flex items-center gap-1 font-mono-tabular text-rose-400"
+              title={`本次挑战湮灭 ${deathsCount} 次`}
+            >
+              <Skull className="w-3.5 h-3.5" />
+              <span>{deathsCount}</span>
+            </div>
+          </>
+        )}
       </div>
 
       {/* Zone 3: Functional interactive action buttons */}
       <div className="flex items-center gap-1 sm:gap-2">
         
+        {/* Assist mode (popover) */}
+        <div className="relative" ref={assistRef}>
+          <button
+            onClick={() => setAssistOpen(o => !o)}
+            className={`relative p-2 rounded-lg transition-colors ${
+              assistActive
+                ? 'text-emerald-400 bg-emerald-500/10'
+                : 'text-stone-400 hover:text-stone-100 dark:hover:text-stone-100 light:hover:text-stone-900 hover:bg-stone-800/60 dark:hover:bg-stone-800/80 light:hover:bg-stone-100'
+            }`}
+            title="辅助模式 · 低重力 / 危险不致死"
+          >
+            <LifeBuoy className={`w-4 h-4 ${assistActive ? 'text-emerald-400' : 'text-stone-400'}`} />
+            {suggestAssist && (
+              <span className="absolute -top-0.5 -right-0.5 w-2 h-2 rounded-full bg-amber-400 animate-ping" />
+            )}
+            {suggestAssist && (
+              <span className="absolute -top-0.5 -right-0.5 w-2 h-2 rounded-full bg-amber-400" />
+            )}
+          </button>
+
+          {assistOpen && (
+            <div className="absolute right-0 top-full mt-2 w-64 rounded-xl border border-stone-800 dark:border-stone-800 light:border-stone-200 bg-stone-900 dark:bg-stone-900 light:bg-white shadow-2xl shadow-black/40 p-3 z-50">
+              <div className="text-xs font-semibold text-stone-200 dark:text-stone-200 light:text-stone-800 mb-1 flex items-center gap-1.5">
+                <LifeBuoy className="w-3.5 h-3.5 text-emerald-400" />
+                辅助模式
+              </div>
+              <p className="text-[10px] leading-relaxed text-stone-500 dark:text-stone-500 light:text-stone-500 mb-2.5">
+                开关即时生效并自动保存。开启任一辅助后，当局通关仍会正常记录进度，但无法获得 S 级棱镜评级。
+              </p>
+              <button
+                onClick={onToggleAssistGravity}
+                className={`w-full flex items-center justify-between px-2.5 py-2 rounded-lg mb-1.5 transition-colors ${
+                  assist.lowGravity
+                    ? 'bg-emerald-500/15 text-emerald-300'
+                    : 'text-stone-300 dark:text-stone-300 light:text-stone-700 hover:bg-stone-800/60 dark:hover:bg-stone-800/60 light:hover:bg-stone-100'
+                }`}
+              >
+                <span className="flex items-center gap-2 text-xs font-medium">
+                  <Gauge className="w-3.5 h-3.5" />
+                  低重力 · 飘浮感
+                </span>
+                <span className={`w-8 h-4 rounded-full relative transition-colors ${assist.lowGravity ? 'bg-emerald-400' : 'bg-stone-700 dark:bg-stone-700 light:bg-stone-300'}`}>
+                  <span className={`absolute top-0.5 w-3 h-3 rounded-full bg-white transition-all ${assist.lowGravity ? 'left-4' : 'left-0.5'}`} />
+                </span>
+              </button>
+              <button
+                onClick={onToggleAssistSafe}
+                className={`w-full flex items-center justify-between px-2.5 py-2 rounded-lg transition-colors ${
+                  assist.safeHazards
+                    ? 'bg-emerald-500/15 text-emerald-300'
+                    : 'text-stone-300 dark:text-stone-300 light:text-stone-700 hover:bg-stone-800/60 dark:hover:bg-stone-800/60 light:hover:bg-stone-100'
+                }`}
+              >
+                <span className="flex items-center gap-2 text-xs font-medium">
+                  <ShieldCheck className="w-3.5 h-3.5" />
+                  激光不致死 · 击退
+                </span>
+                <span className={`w-8 h-4 rounded-full relative transition-colors ${assist.safeHazards ? 'bg-emerald-400' : 'bg-stone-700 dark:bg-stone-700 light:bg-stone-300'}`}>
+                  <span className={`absolute top-0.5 w-3 h-3 rounded-full bg-white transition-all ${assist.safeHazards ? 'left-4' : 'left-0.5'}`} />
+                </span>
+              </button>
+            </div>
+          )}
+        </div>
+
         {/* Sandbox Studio */}
         <button
           onClick={onOpenSandbox}

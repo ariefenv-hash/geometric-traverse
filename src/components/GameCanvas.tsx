@@ -59,11 +59,14 @@ export const GameCanvas: React.FC<GameCanvasProps> = ({
       updatePhysics(worldState, dt, arenaWidth, arenaHeight);
 
       // 2. Smooth Visual Camera Rotation Interpolation
-      // Handle angle wrapping correctly for shortest rotation path
+      // Handle angle wrapping correctly for shortest rotation path.
+      // The PHYSICS angle itself already eases toward the player-intended
+      // target (physics.ts GRAVITY_EASE_RATE), so the camera only needs to
+      // hug it tightly — one smoothing layer owns the feel, not two.
       let diff = worldState.gravityAngle - visualRotationRef.current;
       while (diff < -Math.PI) diff += Math.PI * 2;
       while (diff > Math.PI) diff -= Math.PI * 2;
-      visualRotationRef.current += diff * (1 - Math.exp(-dt * 14));
+      visualRotationRef.current += diff * (1 - Math.exp(-dt * 30));
 
       // 3. Render Canvas (DPR capped by perf tier to protect fill-rate)
       const dpr = Math.min(window.devicePixelRatio || 1, PERF.maxDpr);
@@ -164,22 +167,26 @@ export const GameCanvas: React.FC<GameCanvasProps> = ({
     const dy = e.changedTouches[0].clientY - touchStartPos.current.y;
     const dist = Math.hypot(dx, dy);
 
-    // Swipe threshold 45px
     if (dist > 45) {
       if (Math.abs(dx) > Math.abs(dy)) {
-        // Horizontal swipe
+        // Horizontal swipe -> 90° rotation
         if (dx > 0) {
           onRotateStep(Math.PI / 2); // Swipe right -> Clockwise
         } else {
           onRotateStep(-Math.PI / 2); // Swipe left -> Counter-clockwise
         }
-      } else {
-        // Vertical swipe
-        if (dy > 0) {
+      } else if (dy > 0) {
+        // Swipe DOWN -> 180° gravity flip. This is the single most
+        // destructive accidental gesture (instant reversal mid-transit),
+        // so it demands a deliberate long, unambiguous vertical stroke —
+        // well beyond the 45px rotate threshold and clearly steeper
+        // than 45° — before the game commits to it.
+        if (dist > 90 && Math.abs(dy) > Math.abs(dx) * 1.4) {
           onRotateStep(Math.PI);
-        } else {
-          onNudgeBall();
         }
+      } else {
+        // Swipe up -> nudge
+        onNudgeBall();
       }
     } else {
       // Tap on canvas nudges ball

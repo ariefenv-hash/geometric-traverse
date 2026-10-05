@@ -25,7 +25,10 @@ export const KNOWN_STORAGE_KEYS: StorageKeyInfo[] = [
   { key: 'gt_tutorial_done_v1', label: '新手引导完成记录' },
   { key: 'gt_seen_mechanics_v1', label: '机关首见提示记录' },
   { key: 'gt_shake_enabled_v1', label: '震感开关偏好' },
-  { key: 'gt_ball_skin_v1', label: '星核皮肤偏好' }
+  { key: 'gt_ball_skin_v1', label: '星核皮肤偏好' },
+  { key: 'gt_assist_v1', label: '辅助模式偏好（低重力 / 危险不致死）' },
+  { key: 'gt_theme_v1', label: '主题偏好（虚空 / 白垩）' },
+  { key: 'gt_mute_v1', label: '静音偏好' }
 ];
 
 export interface StorageFootprint {

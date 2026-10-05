@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { LEVELS, loadLevelProgress, saveLevelProgress, encodeLevelShareCode, decodeLevelShareCode } from './game/levels';
 import {
   AnyObstacle,
@@ -6,6 +6,7 @@ import {
   LevelProgress,
   PhysicsParams,
   PhysicsWorldState,
+  PrismRating,
   StarItem,
   ThemeMode
 } from './game/types';
@@ -17,6 +18,21 @@ import {
   markMechanicSeen,
   markTutorialDone
 } from './game/tutorial';
+import {
+  AssistPrefs,
+  loadAssist,
+  loadMuted,
+  loadTheme,
+  saveAssist,
+  saveMuted,
+  saveTheme
+} from './game/settings';
+import {
+  BallSkinInfo,
+  getSkinMeta,
+  getUnlockStats,
+  getUnlockedSkinIds
+} from './game/skins';
 import { sound } from './game/audio';
 import {
   StoredUserLevel,
@@ -41,8 +57,9 @@ import type { ObstacleType } from './game/types';
 export default function App() {
   const [currentLevelIndex, setCurrentLevelIndex] = useState<number>(0);
   const [progress, setProgress] = useState<Record<number, LevelProgress>>(() => loadLevelProgress());
-  const [theme, setTheme] = useState<ThemeMode>('dark');
-  const [isMuted, setIsMuted] = useState<boolean>(false);
+  const [theme, setTheme] = useState<ThemeMode>(() => loadTheme() ?? 'dark');
+  const [isMuted, setIsMuted] = useState<boolean>(() => loadMuted());
+  const [assist, setAssist] = useState<AssistPrefs>(() => loadAssist());
   const [isShakeOn, setIsShakeOn] = useState<boolean>(() => isShakeEnabled());
   const [continuousRotation, setContinuousRotation] = useState<boolean>(false);
   const [isGyroActive, setIsGyroActive] = useState<boolean>(false);
@@ -92,19 +109,41 @@ export default function App() {
     starsCollected: 0,
     rotationsCount: 0,
     elapsedTime: 0,
-    gravityAngle: 0
+    gravityAngle: 0,
+    deathsCount: 0
   });
+
+  // Per-victory bookkeeping passed to the VictoryModal (records, rating, unlocks)
+  interface VictoryStats {
+    deathsTaken: number;
+    rating: PrismRating;
+    isNewBestRotations: boolean;
+    isNewBestTime: boolean;
+    prevBestRotations: number;
+    prevBestTime: number;
+    unlockedSkin: BallSkinInfo | null;
+  }
+  const [victoryStats, setVictoryStats] = useState<VictoryStats | null>(null);
+
+  // Mirror of assist prefs for initLevel (useCallback keeps stable deps)
+  const assistRef = useRef(assist);
 
   // Reset or load level (paramOverrides let the sandbox tune physics on top)
   const initLevel = useCallback((lvl: LevelConfig, paramOverrides?: Partial<PhysicsParams>) => {
     worldStateRef.current = createWorldState(lvl, paramOverrides);
+    worldStateRef.current.assist = {
+      lowGravity: assistRef.current.lowGravity,
+      safeHazards: assistRef.current.safeHazards
+    };
     victoryHandledRef.current = false;
+    setVictoryStats(null);
 
     setHudState({
       starsCollected: 0,
       rotationsCount: 0,
       elapsedTime: 0,
-      gravityAngle: 0
+      gravityAngle: 0,
+      deathsCount: 0
     });
     setIsVictoryOpen(false);
   }, []);
@@ -160,7 +199,25 @@ export default function App() {
       document.documentElement.classList.add('light');
       document.documentElement.classList.remove('dark');
     }
+    saveTheme(theme);
   }, [theme]);
+
+  // Persisted mute preference
+  useEffect(() => {
+    sound.setMuted(isMuted);
+    saveMuted(isMuted);
+  }, [isMuted]);
+
+  // Persisted assist mode: applied to the live world immediately, so toggling
+  // mid-level takes effect on the very next physics frame.
+  useEffect(() => {
+    assistRef.current = assist;
+    saveAssist(assist);
+    worldStateRef.current.assist = {
+      lowGravity: assist.lowGravity,
+      safeHazards: assist.safeHazards
+    };
+  }, [assist]);
 
   // Periodic HUD state sync & Victory check
   useEffect(() => {
@@ -172,7 +229,8 @@ export default function App() {
         starsCollected: starsCount,
         rotationsCount: ws.movesCount,
         elapsedTime: ws.elapsedTime,
-        gravityAngle: ws.gravityAngle
+        gravityAngle: ws.targetAngle,
+        deathsCount: ws.deathCount
       });
 
       // Handle Victory
@@ -202,6 +260,28 @@ export default function App() {
         const newTime = lvlProgress.bestTime === 0
           ? ws.elapsedTime
           : Math.min(lvlProgress.bestTime, ws.elapsedTime);
+        const deathsTaken = ws.deathCount;
+
+        // Prism rating: S = at/below par with a flawless run, A = close to
+        // par with at most a couple of deaths, B = cleared. Lower rank loses.
+        // Assist mode caps the rating at A — S is reserved for unaided runs.
+        const assistOn = !!(ws.assist?.lowGravity || ws.assist?.safeHazards);
+        const rating: PrismRating =
+          ws.movesCount <= currentLevel.parRotations && deathsTaken === 0 && !assistOn
+            ? 'S'
+            : ws.movesCount <= Math.ceil(currentLevel.parRotations * 1.4) && deathsTaken <= 2
+            ? 'A'
+            : 'B';
+        const rankOf = { S: 3, A: 2, B: 1 } as const;
+        const bestRating: PrismRating = !lvlProgress.bestRating
+          ? rating
+          : rankOf[rating] > rankOf[lvlProgress.bestRating]
+          ? rating
+          : lvlProgress.bestRating;
+        const bestDeaths =
+          lvlProgress.bestDeaths === undefined
+            ? deathsTaken
+            : Math.min(lvlProgress.bestDeaths, deathsTaken);
 
         const updated: Record<number, LevelProgress> = {
           ...prev,
@@ -210,7 +290,9 @@ export default function App() {
             completed: true,
             starsEarned: newStars,
             bestRotations: newRotations,
-            bestTime: newTime
+            bestTime: newTime,
+            bestRating,
+            bestDeaths
           }
         };
 
@@ -228,6 +310,23 @@ export default function App() {
           };
         }
 
+        // New-record flags & achievement-skin unlock detection, captured
+        // against the PRE-save progress snapshot.
+        const maxStarsTotal = LEVELS.reduce((acc, l) => acc + l.stars.length, 0);
+        const before = getUnlockedSkinIds(getUnlockStats(prev, maxStarsTotal, LEVELS.length));
+        const after = getUnlockedSkinIds(getUnlockStats(updated, maxStarsTotal, LEVELS.length));
+        const newlyId = after.find(id => !before.includes(id) && getSkinMeta(id)?.unlock);
+        setVictoryStats({
+          deathsTaken,
+          rating,
+          isNewBestRotations:
+            lvlProgress.bestRotations === 0 || ws.movesCount < lvlProgress.bestRotations,
+          isNewBestTime: lvlProgress.bestTime === 0 || ws.elapsedTime < lvlProgress.bestTime,
+          prevBestRotations: lvlProgress.bestRotations,
+          prevBestTime: lvlProgress.bestTime,
+          unlockedSkin: newlyId ? getSkinMeta(newlyId) : null
+        });
+
         saveLevelProgress(updated);
         setProgress(updated);
       }
@@ -236,25 +335,33 @@ export default function App() {
     return () => clearInterval(timer);
   }, [currentLevel, currentLevelIndex, isVictoryOpen, playtestLevel]);
 
-  // Rotation Controls
+  // Rotation Controls: intent is written to targetAngle; the physics loop
+  // eases the actual gravity angle toward it (see GRAVITY_EASE_RATE), so the
+  // world, the ball and the camera all share one smooth motion.
   const handleRotateStep = useCallback((delta: number) => {
+    const ws = worldStateRef.current;
+    if (ws.status !== 'playing') return; // ignore inputs while dying / won
     sound.unlock();
     sound.playRotate();
-    const ws = worldStateRef.current;
-    ws.gravityAngle += delta;
-    ws.movesCount += 1;
+    const oldQuad = Math.round(ws.targetAngle / (Math.PI / 2));
+    ws.targetAngle += delta;
+    const newQuad = Math.round(ws.targetAngle / (Math.PI / 2));
+    if (oldQuad !== newQuad) {
+      ws.movesCount += 1;
+    }
 
     setHudState(prev => ({
       ...prev,
-      gravityAngle: ws.gravityAngle,
+      gravityAngle: ws.targetAngle,
       rotationsCount: ws.movesCount
     }));
   }, []);
 
   const handleSetAngle = useCallback((angle: number) => {
-    sound.unlock();
     const ws = worldStateRef.current;
-    const oldQuad = Math.round(ws.gravityAngle / (Math.PI / 2));
+    if (ws.status !== 'playing') return;
+    sound.unlock();
+    const oldQuad = Math.round(ws.targetAngle / (Math.PI / 2));
     const newQuad = Math.round(angle / (Math.PI / 2));
 
     if (oldQuad !== newQuad) {
@@ -262,22 +369,23 @@ export default function App() {
       ws.movesCount += 1;
     }
 
-    ws.gravityAngle = angle;
+    ws.targetAngle = angle;
     setHudState(prev => ({
       ...prev,
-      gravityAngle: ws.gravityAngle,
+      gravityAngle: ws.targetAngle,
       rotationsCount: ws.movesCount
     }));
   }, []);
 
   const handleNudgeBall = useCallback(() => {
-    sound.unlock();
     const ws = worldStateRef.current;
-    if (ws.ball.dead || ws.isWon) return;
+    if (ws.status !== 'playing' || ws.isWon) return;
+    sound.unlock();
 
-    // Give a slight kinetic impulse along current gravity or random slight nudge
+    // Deterministic impulse exactly along the current gravity direction —
+    // the old ±0.2 rad random drift made precise play feel like coin flips.
     const impulse = 180;
-    const angle = ws.gravityAngle + (Math.random() - 0.5) * 0.4;
+    const angle = ws.gravityAngle;
     ws.ball.vx += Math.sin(angle) * impulse;
     ws.ball.vy += Math.cos(angle) * impulse;
 
@@ -334,7 +442,8 @@ export default function App() {
       if (angle < 0) angle += Math.PI * 2;
 
       const ws = worldStateRef.current;
-      ws.gravityAngle = angle;
+      if (ws.status !== 'playing') return;
+      ws.targetAngle = angle;
       setHudState(prev => ({ ...prev, gravityAngle: angle }));
     };
 
@@ -474,9 +583,17 @@ export default function App() {
     return true;
   }, [initLevel]);
 
+  // Aggregate skin-unlock stats for the picker (memoized per progress change)
+  const skinStats = useMemo(
+    () => getUnlockStats(progress, LEVELS.reduce((acc, l) => acc + l.stars.length, 0), LEVELS.length),
+    [progress]
+  );
+
   return (
     <div className={`relative w-screen h-screen overflow-hidden flex flex-col ${
-      theme === 'dark' ? 'bg-[#07080c] text-stone-100' : 'bg-[#f8fafc] text-stone-900'
+      theme === 'dark'
+        ? 'bg-void-radial text-stone-100'
+        : 'bg-alabaster-radial text-stone-900'
     }`}>
       
       {/* Top Bar HUD */}
@@ -485,6 +602,7 @@ export default function App() {
         starsCollected={hudState.starsCollected}
         rotationsCount={hudState.rotationsCount}
         elapsedTime={hudState.elapsedTime}
+        deathsCount={hudState.deathsCount}
         theme={theme}
         isMuted={isMuted}
         onToggleTheme={() => setTheme(t => t === 'dark' ? 'light' : 'dark')}
@@ -499,6 +617,9 @@ export default function App() {
           setShakeEnabled(next);
           setIsShakeOn(next);
         }}
+        assist={assist}
+        onToggleAssistGravity={() => setAssist(a => ({ ...a, lowGravity: !a.lowGravity }))}
+        onToggleAssistSafe={() => setAssist(a => ({ ...a, safeHazards: !a.safeHazards }))}
         onResetLevel={handleReplay}
         onOpenLevelSelect={() => setIsLevelSelectOpen(true)}
         onOpenSandbox={() => setIsSandboxOpen(true)}
@@ -608,6 +729,7 @@ export default function App() {
         starsEarned={hudState.starsCollected}
         rotationsTaken={hudState.rotationsCount}
         elapsedTime={hudState.elapsedTime}
+        stats={victoryStats}
         isOpen={isVictoryOpen}
         onNextLevel={handleNextLevel}
         onReplay={handleReplay}
@@ -617,6 +739,7 @@ export default function App() {
         }}
         onDismiss={() => setIsVictoryOpen(false)}
         hasNextLevel={!playtestLevel && currentLevelIndex < LEVELS.length - 1}
+        campaignStats={skinStats}
         theme={theme}
       />
 
@@ -666,6 +789,7 @@ export default function App() {
         isOpen={isSkinPickerOpen}
         onClose={() => setIsSkinPickerOpen(false)}
         theme={theme}
+        unlockStats={skinStats}
       />
 
     </div>

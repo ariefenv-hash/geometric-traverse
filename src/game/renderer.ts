@@ -18,7 +18,16 @@ import {
   ThemeMode
 } from './types';
 import { emitterBeamDir, isPhaseBarrierSolid, mirrorSurfaceSegment } from './physics';
-import { CLASSIC_SKIN_ID, ensureSkinImagesLoaded, getSelectedSkinId, getSkinImage } from './skins';
+import { CLASSIC_SKIN_ID, ensureSkinImagesLoaded, getSelectedSkinId, getSkinImage, getSelectedSkinAccent } from './skins';
+import { PERF } from './perf';
+
+/** Convert '#rrggbb' + alpha into an rgba() string. Invalid input → opaque red (never silently black). */
+function hexToRgba(hex: string, alpha: number): string {
+  const m = /^#?([0-9a-f]{6})$/i.exec(hex);
+  if (!m) return `rgba(255, 0, 0, ${alpha})`;
+  const n = parseInt(m[1], 16);
+  return `rgba(${(n >> 16) & 255}, ${(n >> 8) & 255}, ${n & 255}, ${alpha})`;
+}
 
 export interface RenderContext {
   ctx: CanvasRenderingContext2D;
@@ -148,6 +157,10 @@ export function renderGame(
   ctx.fillStyle = isDark ? '#080a0f' : '#f8fafc';
   ctx.fillRect(0, 0, width, height);
 
+  // Deep-space vignette + instrument arcs (screen-space: rotation-invariant,
+  // so the horizon stays anchored no matter how the gravity view spins).
+  drawScreenVignette(ctx, width, height, isDark);
+
   // Camera Transformation: Center and rotate the arena smoothly
   const centerX = width / 2;
   const centerY = height / 2;
@@ -169,6 +182,11 @@ export function renderGame(
 
   // 1. Draw Geometric Drafting Grid & Celestial Compass Rings
   drawBackgroundGrid(ctx, arenaWidth, arenaHeight, isDark, time);
+
+  // 1.5 Portal pairing "umbilicals": a faint dashed arc between each pair
+  //     telegraphs which gate leads where — puzzle readability AND a softer,
+  //     more premium geometry at once.
+  drawPortalUmbilicals(ctx, state, time);
 
   // 2. Underlay obstacle layers (anti-gravity wells, rails, portals, plates)
   runRenderPipeline(ctx, state, isDark, time, true);
@@ -199,8 +217,65 @@ export function renderGame(
   drawParticles(ctx, state.particles);
 
   // 9. Draw Arena Outer Bounding Frame
-  drawArenaBorder(ctx, arenaWidth, arenaHeight, isDark);
+  drawArenaBorder(ctx, arenaWidth, arenaHeight, isDark, time);
 
+  ctx.restore();
+}
+
+/**
+ * Rotation-invariant backdrop polish: a soft edge vignette plus two vast
+ * instrument arcs and a fine diagonal crosshair — all drawn in SCREEN space
+ * before the camera transform, so they never spin with the arena.
+ */
+function drawScreenVignette(
+  ctx: CanvasRenderingContext2D,
+  w: number,
+  h: number,
+  isDark: boolean
+) {
+  const cx = w / 2;
+  const cy = h / 2;
+
+  // Vignette: transparent center → deepened edges
+  const r = Math.hypot(w, h) / 2;
+  const grad = ctx.createRadialGradient(cx, cy, r * 0.45, cx, cy, r);
+  grad.addColorStop(0, 'rgba(0, 0, 0, 0)');
+  grad.addColorStop(1, isDark ? 'rgba(0, 0, 0, 0.42)' : 'rgba(15, 23, 42, 0.10)');
+  ctx.fillStyle = grad;
+  ctx.fillRect(0, 0, w, h);
+
+  // Two vast concentric instrument arcs around the horizon center
+  ctx.save();
+  ctx.strokeStyle = isDark ? 'rgba(56, 189, 248, 0.05)' : 'rgba(14, 116, 144, 0.06)';
+  ctx.lineWidth = 1.5;
+  ctx.setLineDash([2, 14]);
+  ctx.beginPath();
+  ctx.arc(cx, cy, r * 0.55, 0, Math.PI * 2);
+  ctx.stroke();
+  ctx.setLineDash([1, 22]);
+  ctx.beginPath();
+  ctx.arc(cx, cy, r * 0.78, 0, Math.PI * 2);
+  ctx.stroke();
+  ctx.restore();
+
+  // Fine diagonal crosshair marks in the four corners (drafting-table feel)
+  ctx.save();
+  ctx.strokeStyle = isDark ? 'rgba(255, 255, 255, 0.05)' : 'rgba(15, 23, 42, 0.06)';
+  ctx.lineWidth = 1;
+  const L = 26;
+  const inset = 18;
+  ctx.beginPath();
+  for (const [px, py, sx, sy] of [
+    [inset, inset, 1, 1],
+    [w - inset, inset, -1, 1],
+    [inset, h - inset, 1, -1],
+    [w - inset, h - inset, -1, -1]
+  ] as const) {
+    ctx.moveTo(px, py + sy * L);
+    ctx.lineTo(px, py);
+    ctx.lineTo(px + sx * L, py);
+  }
+  ctx.stroke();
   ctx.restore();
 }
 
@@ -213,13 +288,14 @@ function drawBackgroundGrid(
 ) {
   ctx.save();
   const gridStep = 40;
+  const majorStep = 200; // secondary drafting tier: major engineering grid
   const gridColor = isDark ? 'rgba(255, 255, 255, 0.028)' : 'rgba(15, 23, 42, 0.035)';
+  const majorColor = isDark ? 'rgba(255, 255, 255, 0.065)' : 'rgba(15, 23, 42, 0.08)';
   const axisColor = isDark ? 'rgba(56, 189, 248, 0.09)' : 'rgba(14, 116, 144, 0.07)';
 
-  // 1. Grid lines
+  // 1a. Fine grid
   ctx.strokeStyle = gridColor;
   ctx.lineWidth = 1;
-
   ctx.beginPath();
   for (let x = 0; x <= w; x += gridStep) {
     ctx.moveTo(x, 0);
@@ -228,6 +304,32 @@ function drawBackgroundGrid(
   for (let y = 0; y <= h; y += gridStep) {
     ctx.moveTo(0, y);
     ctx.lineTo(w, y);
+  }
+  ctx.stroke();
+
+  // 1b. Major grid + surveyor cross-ticks at intersections
+  ctx.strokeStyle = majorColor;
+  ctx.beginPath();
+  for (let x = 0; x <= w; x += majorStep) {
+    ctx.moveTo(x, 0);
+    ctx.lineTo(x, h);
+  }
+  for (let y = 0; y <= h; y += majorStep) {
+    ctx.moveTo(0, y);
+    ctx.lineTo(w, y);
+  }
+  ctx.stroke();
+
+  ctx.strokeStyle = isDark ? 'rgba(56, 189, 248, 0.22)' : 'rgba(14, 116, 144, 0.2)';
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  for (let x = 0; x <= w; x += majorStep) {
+    for (let y = 0; y <= h; y += majorStep) {
+      ctx.moveTo(x - 5, y);
+      ctx.lineTo(x + 5, y);
+      ctx.moveTo(x, y - 5);
+      ctx.lineTo(x, y + 5);
+    }
   }
   ctx.stroke();
 
@@ -267,18 +369,54 @@ function drawBackgroundGrid(
   ctx.lineTo(cx, cy + 20);
   ctx.stroke();
 
-  // 3. Floating celestial stardust particles (deterministic procedural dust)
-  ctx.fillStyle = isDark ? 'rgba(255, 255, 255, 0.25)' : 'rgba(15, 23, 42, 0.2)';
-  for (let i = 0; i < 36; i++) {
+  // 3. Floating geometric debris (deterministic procedural field)
+  // Small triangles / diamonds / dashes drifting at two parallax depths —
+  // denser on high-tier devices, still present on low-tier.
+  const debrisCount = PERF.tier === 'high' ? 54 : 26;
+  for (let i = 0; i < debrisCount; i++) {
     const seed = i * 9973;
     const bx = (seed % (w - 60)) + 30;
     const by = ((seed * 37) % (h - 60)) + 30;
     const driftX = Math.sin(time * 0.6 + i) * 6;
     const driftY = Math.cos(time * 0.5 + i * 1.5) * 6;
-    const sz = (i % 3 === 0) ? 1.8 : 1.2;
-    const alpha = 0.15 + Math.sin(time * 2 + i) * 0.1;
+    const depth = i % 2 === 0 ? 1 : 0.55; // two depth planes
+    const alpha = (0.15 + Math.sin(time * 2 + i) * 0.1) * depth;
     ctx.globalAlpha = Math.max(0, alpha);
-    ctx.fillRect(bx + driftX, by + driftY, sz, sz);
+    const kind = i % 4;
+    const sz = (i % 3 === 0 ? 3.2 : 2.2) * depth + 1;
+    if (kind === 0) {
+      // Triangle, slowly rotating
+      const rot = time * 0.25 + i;
+      ctx.save();
+      ctx.translate(bx + driftX, by + driftY);
+      ctx.rotate(rot);
+      ctx.beginPath();
+      ctx.moveTo(0, -sz);
+      ctx.lineTo(sz * 0.87, sz * 0.5);
+      ctx.lineTo(-sz * 0.87, sz * 0.5);
+      ctx.closePath();
+      ctx.fill();
+      ctx.restore();
+    } else if (kind === 1) {
+      // Diamond
+      const rot = Math.PI / 4 + time * 0.18 + i;
+      ctx.save();
+      ctx.translate(bx + driftX, by + driftY);
+      ctx.rotate(rot);
+      ctx.fillRect(-sz * 0.7, -sz * 0.7, sz * 1.4, sz * 1.4);
+      ctx.restore();
+    } else if (kind === 2) {
+      // Short dash segment
+      const rot = time * 0.12 + i * 0.7;
+      ctx.save();
+      ctx.translate(bx + driftX, by + driftY);
+      ctx.rotate(rot);
+      ctx.fillRect(-sz * 1.6, -0.6, sz * 3.2, 1.2);
+      ctx.restore();
+    } else {
+      // Tiny square (legacy stardust, kept for continuity)
+      ctx.fillRect(bx + driftX, by + driftY, sz * 0.6, sz * 0.6);
+    }
   }
   ctx.globalAlpha = 1.0;
 
@@ -289,29 +427,35 @@ function drawArenaBorder(
   ctx: CanvasRenderingContext2D,
   w: number,
   h: number,
-  isDark: boolean
+  isDark: boolean,
+  time: number
 ) {
   ctx.save();
+
+  // Double stroke: crisp inner line + wide faint halo gives the frame depth
+  ctx.strokeStyle = isDark ? 'rgba(56, 189, 248, 0.10)' : 'rgba(15, 23, 42, 0.08)';
+  ctx.lineWidth = 7;
+  ctx.strokeRect(0, 0, w, h);
   ctx.strokeStyle = isDark ? 'rgba(255, 255, 255, 0.18)' : 'rgba(15, 23, 42, 0.25)';
-  ctx.lineWidth = 3;
+  ctx.lineWidth = 2;
   ctx.strokeRect(0, 0, w, h);
 
-  // Geometric corner accents
-  const cornerSize = 14;
-  ctx.fillStyle = isDark ? '#38bdf8' : '#0f172a';
-
+  // L-shaped surveyor corner ticks with a slow breathing accent
+  const breath = 0.55 + Math.sin(time * 1.6) * 0.25;
+  const cornerSize = 18;
+  ctx.strokeStyle = isDark ? `rgba(56, 189, 248, ${0.4 + breath * 0.5})` : `rgba(15, 23, 42, ${0.5 + breath * 0.3})`;
+  ctx.lineWidth = 3;
+  ctx.lineCap = 'square';
+  ctx.beginPath();
   // Top-left
-  ctx.fillRect(-2, -2, cornerSize, 3);
-  ctx.fillRect(-2, -2, 3, cornerSize);
+  ctx.moveTo(-1, cornerSize); ctx.lineTo(-1, -1); ctx.lineTo(cornerSize, -1);
   // Top-right
-  ctx.fillRect(w - cornerSize + 2, -2, cornerSize, 3);
-  ctx.fillRect(w - 1, -2, 3, cornerSize);
+  ctx.moveTo(w - cornerSize, -1); ctx.lineTo(w + 1, -1); ctx.lineTo(w + 1, cornerSize);
   // Bottom-left
-  ctx.fillRect(-2, h - 1, cornerSize, 3);
-  ctx.fillRect(-2, h - cornerSize + 2, 3, cornerSize);
+  ctx.moveTo(-1, h - cornerSize); ctx.lineTo(-1, h + 1); ctx.lineTo(cornerSize, h + 1);
   // Bottom-right
-  ctx.fillRect(w - cornerSize + 2, h - 1, cornerSize, 3);
-  ctx.fillRect(w - 1, h - cornerSize + 2, 3, cornerSize);
+  ctx.moveTo(w - cornerSize, h + 1); ctx.lineTo(w + 1, h + 1); ctx.lineTo(w + 1, h - cornerSize);
+  ctx.stroke();
 
   ctx.restore();
 }
@@ -374,6 +518,22 @@ function drawWall(
   // Fill
   ctx.fillStyle = isDark ? '#141824' : '#e2e8f0';
   ctx.fillRect(x, y, w, h);
+
+  // Faux-2.5D bevel: lit top edge, shaded bottom edge — two cheap strokes
+  // that give every wall physical volume under the arena's top-down light.
+  if (w >= 8 && h >= 8) {
+    ctx.strokeStyle = isDark ? 'rgba(255, 255, 255, 0.10)' : 'rgba(255, 255, 255, 0.7)';
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.moveTo(x + 1, y + 1);
+    ctx.lineTo(x + w - 1, y + 1);
+    ctx.stroke();
+    ctx.strokeStyle = isDark ? 'rgba(0, 0, 0, 0.30)' : 'rgba(15, 23, 42, 0.18)';
+    ctx.beginPath();
+    ctx.moveTo(x + 1, y + h - 1);
+    ctx.lineTo(x + w - 1, y + h - 1);
+    ctx.stroke();
+  }
 
   // Outer Crisp Stroke
   ctx.strokeStyle = isDark ? 'rgba(56, 189, 248, 0.4)' : '#334155';
@@ -977,6 +1137,60 @@ function drawPortal(
   ctx.restore();
 }
 
+/**
+ * Faint dashed "umbilical" arcs connecting paired portals, with a slow
+ * pulse travelling along the line. Drawn beneath the gates themselves so
+ * the topology reads instantly at a glance.
+ */
+function drawPortalUmbilicals(
+  ctx: CanvasRenderingContext2D,
+  state: PhysicsWorldState,
+  time: number
+) {
+  const portals = state.obstacles.filter(
+    (o): o is PortalObstacle => o.type === 'portal' && !!o.targetPortalId
+  );
+  if (portals.length < 2) return;
+
+  const seen = new Set<string>();
+  ctx.save();
+  ctx.lineWidth = 1.2;
+  for (const p of portals) {
+    const pairId = `${p.id}|${p.targetPortalId}`;
+    const reverseId = `${p.targetPortalId}|${p.id}`;
+    if (seen.has(pairId) || seen.has(reverseId)) continue;
+    seen.add(pairId);
+
+    const target = portals.find(q => q.id === p.targetPortalId);
+    if (!target) continue;
+
+    const x1 = p.x + p.width / 2;
+    const y1 = p.y + p.height / 2;
+    const x2 = target.x + target.width / 2;
+    const y2 = target.y + target.height / 2;
+    const mx = (x1 + x2) / 2;
+    const my = (y1 + y2) / 2;
+
+    // Gentle perpendicular bow so twin links don't overlap on straight pairs
+    const dx = x2 - x1;
+    const dy = y2 - y1;
+    const len = Math.hypot(dx, dy) || 1;
+    const bow = Math.min(40, len * 0.12) * (p.id < (target.id ?? '').toString() ? 1 : -1);
+    const cx = mx + (-dy / len) * bow;
+    const cy = my + (dx / len) * bow;
+
+    ctx.strokeStyle = 'rgba(192, 132, 252, 0.16)';
+    ctx.setLineDash([5, 9]);
+    ctx.lineDashOffset = -time * 26;
+    ctx.beginPath();
+    ctx.moveTo(x1, y1);
+    ctx.quadraticCurveTo(cx, cy, x2, y2);
+    ctx.stroke();
+  }
+  ctx.setLineDash([]);
+  ctx.restore();
+}
+
 function drawExitGate(
   ctx: CanvasRenderingContext2D,
   exit: import('./types').ExitGate,
@@ -1238,7 +1452,7 @@ function drawLasers(
     if (!laser.active) continue;
     ctx.save();
 
-    // Outer glow
+    // Wide soft aura
     ctx.strokeStyle = isDark ? 'rgba(244, 63, 94, 0.35)' : 'rgba(225, 29, 72, 0.28)';
     ctx.lineWidth = 8 + Math.sin(time * 15) * 2;
     ctx.beginPath();
@@ -1254,10 +1468,30 @@ function drawLasers(
     ctx.lineTo(laser.endX, laser.endY);
     ctx.stroke();
 
-    // Laser terminal spark
+    // Marching-ants energy dashes travelling along the beam
+    ctx.strokeStyle = isDark ? 'rgba(255, 214, 224, 0.4)' : 'rgba(255, 200, 214, 0.45)';
+    ctx.lineWidth = 5;
+    ctx.setLineDash([7, 13]);
+    ctx.lineDashOffset = -time * 90;
+    ctx.beginPath();
+    ctx.moveTo(laser.startX, laser.startY);
+    ctx.lineTo(laser.endX, laser.endY);
+    ctx.stroke();
+    ctx.setLineDash([]);
+
+    // Muzzle + terminal radial glows (cheap gradients, no shadowBlur)
+    for (const [ex, ey] of [[laser.startX, laser.startY], [laser.endX, laser.endY]] as const) {
+      const gr = ctx.createRadialGradient(ex, ey, 1, ex, ey, 11);
+      gr.addColorStop(0, 'rgba(244, 63, 94, 0.7)');
+      gr.addColorStop(1, 'rgba(244, 63, 94, 0)');
+      ctx.fillStyle = gr;
+      ctx.beginPath();
+      ctx.arc(ex, ey, 11, 0, Math.PI * 2);
+      ctx.fill();
+    }
     ctx.fillStyle = '#f43f5e';
     ctx.beginPath();
-    ctx.arc(laser.endX, laser.endY, 4, 0, Math.PI * 2);
+    ctx.arc(laser.endX, laser.endY, 3.5, 0, Math.PI * 2);
     ctx.fill();
 
     ctx.restore();
@@ -1270,15 +1504,16 @@ function drawBall(
   isDark: boolean
 ) {
   const { ball } = state;
+  // The whole halo family takes its tone from the equipped skin's accent,
+  // unifying the ball's glow with its artwork (classic → sky-400).
+  const accent = getSelectedSkinAccent();
   ctx.save();
 
   // 1. Trail
   for (let i = 0; i < ball.trail.length; i++) {
     const t = ball.trail[i];
     const r = ball.radius * (0.3 + (i / ball.trail.length) * 0.7);
-    ctx.fillStyle = isDark
-      ? `rgba(56, 189, 248, ${t.alpha * 0.4})`
-      : `rgba(37, 99, 235, ${t.alpha * 0.35})`;
+    ctx.fillStyle = hexToRgba(accent, t.alpha * (isDark ? 0.4 : 0.35));
     ctx.beginPath();
     ctx.arc(t.x, t.y, r, 0, Math.PI * 2);
     ctx.fill();
@@ -1288,7 +1523,7 @@ function drawBall(
 
   // 2. Phasing effect (if ball is passing through permeable gate)
   if (ball.isPhasing) {
-    ctx.strokeStyle = isDark ? 'rgba(56, 189, 248, 0.8)' : 'rgba(37, 99, 235, 0.8)';
+    ctx.strokeStyle = hexToRgba(accent, 0.8);
     ctx.lineWidth = 2;
     ctx.setLineDash([3, 3]);
     ctx.beginPath();
@@ -1297,10 +1532,27 @@ function drawBall(
     ctx.setLineDash([]);
   }
 
+  // 2.5 Post-respawn / assist shield: hexagonal ward, blinking as it expires
+  if (state.respawnGrace > 0) {
+    const blink = 0.4 + 0.3 * Math.sin(state.elapsedTime * 14);
+    ctx.strokeStyle = `rgba(52, 211, 153, ${blink})`;
+    ctx.lineWidth = 1.6;
+    ctx.beginPath();
+    for (let i = 0; i < 6; i++) {
+      const a = (i / 6) * Math.PI * 2 + state.elapsedTime * 1.4;
+      const px = Math.cos(a) * ball.radius * 1.7;
+      const py = Math.sin(a) * ball.radius * 1.7;
+      if (i === 0) ctx.moveTo(px, py);
+      else ctx.lineTo(px, py);
+    }
+    ctx.closePath();
+    ctx.stroke();
+  }
+
   // 3. Ambient ball aura
   const auraR = ball.radius * (1.3 + Math.sin(ball.pulsePhase) * 0.1);
   const grad = ctx.createRadialGradient(0, 0, 1, 0, 0, auraR);
-  grad.addColorStop(0, isDark ? 'rgba(56, 189, 248, 0.4)' : 'rgba(37, 99, 235, 0.3)');
+  grad.addColorStop(0, hexToRgba(accent, isDark ? 0.4 : 0.3));
   grad.addColorStop(1, 'transparent');
   ctx.fillStyle = grad;
   ctx.beginPath();
@@ -1329,7 +1581,7 @@ function drawBall(
   const speed = Math.hypot(ball.vx, ball.vy);
   if (speed > 250) {
     ctx.shadowBlur = Math.min((speed - 250) * 0.05, 14);
-    ctx.shadowColor = isDark ? '#38bdf8' : '#2563eb';
+    ctx.shadowColor = accent;
   }
 
   ctx.fillStyle = isDark ? '#ffffff' : '#0f172a';
@@ -1339,14 +1591,14 @@ function drawBall(
   ctx.shadowBlur = 0;
 
   // 5. High-contrast inner rim
-  ctx.strokeStyle = isDark ? '#38bdf8' : '#2563eb';
+  ctx.strokeStyle = accent;
   ctx.lineWidth = 2.5;
   ctx.beginPath();
   ctx.arc(0, 0, ball.radius - 1, 0, Math.PI * 2);
   ctx.stroke();
 
   // 6. Central gem accent
-  ctx.fillStyle = isDark ? '#38bdf8' : '#60a5fa';
+  ctx.fillStyle = accent;
   ctx.beginPath();
   ctx.arc(0, 0, 3, 0, Math.PI * 2);
   ctx.fill();
@@ -1354,7 +1606,7 @@ function drawBall(
   // 7. Orbiting celestial satellite rings (sacred geometry halo)
   ctx.save();
   ctx.rotate(state.elapsedTime * 1.8);
-  ctx.strokeStyle = isDark ? 'rgba(56, 189, 248, 0.35)' : 'rgba(37, 99, 235, 0.3)';
+  ctx.strokeStyle = hexToRgba(accent, isDark ? 0.35 : 0.3);
   ctx.lineWidth = 1;
   ctx.beginPath();
   ctx.ellipse(0, 0, ball.radius * 1.75, ball.radius * 0.7, 0, 0, Math.PI * 2);
@@ -1364,7 +1616,7 @@ function drawBall(
   const satAngle1 = state.elapsedTime * 3.2;
   const satX1 = Math.cos(satAngle1) * (ball.radius * 1.75);
   const satY1 = Math.sin(satAngle1) * (ball.radius * 0.7);
-  ctx.fillStyle = isDark ? '#38bdf8' : '#2563eb';
+  ctx.fillStyle = accent;
   ctx.beginPath();
   ctx.arc(satX1, satY1, 2, 0, Math.PI * 2);
   ctx.fill();
@@ -1408,6 +1660,19 @@ function drawParticles(ctx: CanvasRenderingContext2D, particles: Particle[]) {
       ctx.moveTo(p.x, p.y);
       ctx.lineTo(p.x + Math.cos(p.angle) * len, p.y + Math.sin(p.angle) * len);
       ctx.stroke();
+    } else if (p.shape === 'diamond') {
+      ctx.translate(p.x, p.y);
+      ctx.rotate(p.angle ?? Math.PI / 4);
+      ctx.fillRect(-p.size * 0.7, -p.size * 0.7, p.size * 1.4, p.size * 1.4);
+    } else if (p.shape === 'triangle') {
+      ctx.translate(p.x, p.y);
+      ctx.rotate(p.angle ?? 0);
+      ctx.beginPath();
+      ctx.moveTo(0, -p.size);
+      ctx.lineTo(p.size * 0.87, p.size * 0.5);
+      ctx.lineTo(-p.size * 0.87, p.size * 0.5);
+      ctx.closePath();
+      ctx.fill();
     } else if (p.shape === 'square') {
       ctx.fillRect(p.x - p.size / 2, p.y - p.size / 2, p.size, p.size);
     } else {

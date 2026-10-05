@@ -46,6 +46,12 @@ export const DEFAULT_PHYSICS_PARAMS: PhysicsParams = {
 
 /** Seconds the death explosion plays before the ball respawns. */
 const DEATH_RESPAWN_DELAY = 0.9;
+/** Shorter respawn wait once the player has died 3+ times on the same attempt. */
+const DEATH_RESPAWN_DELAY_FRENZY = 0.55;
+/** Post-respawn hazard immunity (seconds) — blink shield communicates it. */
+const RESPAWN_GRACE = 1.2;
+/** Exponential ease rate (1/s) for gravityAngle → targetAngle. ~90% in 0.13s. */
+const GRAVITY_EASE_RATE = 18;
 
 /**
  * Resolve the runtime physics parameter set:
@@ -106,7 +112,9 @@ export function createWorldState(
     deathTimer: 0,
     ballStart: { x: level.ballStart.x, y: level.ballStart.y },
     params: resolvePhysicsParams(level.physics, paramOverrides),
-    shake: { magnitude: 0, duration: 0, elapsed: 0 }
+    shake: { magnitude: 0, duration: 0, elapsed: 0 },
+    deathCount: 0,
+    respawnGrace: 0
   };
 }
 
@@ -498,11 +506,16 @@ const OBSTACLE_BEHAVIORS: Partial<Record<ObstacleType, ObstacleBehavior>> = {
   },
 
   hazard: (state, obs) => {
+    if (state.respawnGrace > 0) return; // post-respawn / assist i-frames
     if (circleBoxOverlap(
       state.ball.x, state.ball.y, state.ball.radius,
       obs.x, obs.y, obs.width, obs.height
     )) {
-      triggerDeath(state);
+      if (state.assist?.safeHazards) {
+        knockBallOutOfZone(state, obs.x, obs.y, obs.width, obs.height);
+      } else {
+        triggerDeath(state);
+      }
     }
   },
 
@@ -870,7 +883,7 @@ export function updatePhysics(
   if (state.status === 'dying') {
     state.deathTimer += dt;
     updateEffects(state, dt);
-    if (state.deathTimer >= DEATH_RESPAWN_DELAY) {
+    if (state.deathTimer >= (state.deathCount >= 3 ? DEATH_RESPAWN_DELAY_FRENZY : DEATH_RESPAWN_DELAY)) {
       respawnBall(state);
     }
     return;
@@ -891,13 +904,30 @@ export function updatePhysics(
   if (state.portalCooldown > 0) {
     state.portalCooldown -= dt;
   }
+  if (state.respawnGrace > 0) {
+    state.respawnGrace = Math.max(0, state.respawnGrace - dt);
+  }
+
+  // Gravity easing: physics follows the player-intended targetAngle on the
+  // SAME smooth curve the camera uses to follow physics, so what the player
+  // sees and what the ball feels are one motion (perceived-input-lag killer).
+  if (state.targetAngle !== state.gravityAngle) {
+    let diff = state.targetAngle - state.gravityAngle;
+    while (diff > Math.PI) diff -= Math.PI * 2;
+    while (diff < -Math.PI) diff += Math.PI * 2;
+    if (Math.abs(diff) < 0.003) {
+      state.gravityAngle = state.targetAngle;
+    } else {
+      state.gravityAngle += diff * (1 - Math.exp(-dt * GRAVITY_EASE_RATE));
+    }
+  }
 
   // Calculate gravity vector based on current gravity angle
   // 0 rad: gravity down (x: 0, y: +g)
   // PI/2: gravity right (x: +g, y: 0)
   // PI: gravity up (x: 0, y: -g)
   // 3*PI/2: gravity left (x: -g, y: 0)
-  const g = GRAVITY_MAGNITUDE * params.gravityScale;
+  const g = GRAVITY_MAGNITUDE * params.gravityScale * (state.assist?.lowGravity ? 0.7 : 1);
   const gx = g * Math.sin(state.gravityAngle);
   const gy = g * Math.cos(state.gravityAngle);
 
@@ -917,6 +947,7 @@ export function updatePhysics(
   state.lasers = computeLaserSegments(state.obstacles, arenaWidth, arenaHeight);
 
   const sweepLaserInterception = (): boolean => {
+    if (state.respawnGrace > 0) return false; // post-respawn / assist i-frames
     for (const laser of state.lasers) {
       const ballDist = distToSegment(
         state.ball.x, state.ball.y,
@@ -924,8 +955,40 @@ export function updatePhysics(
         laser.endX, laser.endY
       );
       if (ballDist < state.ball.radius * 0.8) {
-        triggerDeath(state);
-        return true;
+        if (state.assist?.safeHazards) {
+          // Assist mode: deflect off the beam instead of dying. Push the ball
+          // away along the beam normal, grant i-frames, dress with a ripple.
+          const lx = laser.endX - laser.startX;
+          const ly = laser.endY - laser.startY;
+          const ll = Math.hypot(lx, ly) || 1;
+          let nx = state.ball.x - laser.startX;
+          let ny = state.ball.y - laser.startY;
+          const proj = (nx * lx + ny * ly) / (ll * ll);
+          nx -= lx * proj;
+          ny -= ly * proj;
+          const nl = Math.hypot(nx, ny);
+          if (nl > 0.0001) {
+            nx /= nl; ny /= nl;
+          } else { nx = 0; ny = -1; }
+          state.ball.vx = nx * 420;
+          state.ball.vy = ny * 420;
+          state.ball.x += nx * 6;
+          state.ball.y += ny * 6;
+          state.respawnGrace = 0.6;
+          state.ripples.push({
+            x: state.ball.x,
+            y: state.ball.y,
+            radius: 8,
+            maxRadius: 44,
+            alpha: 0.9,
+            color: 'rgba(52, 211, 153, 0.85)',
+            lineWidth: 2
+          });
+          sound.playImpact(120);
+        } else {
+          triggerDeath(state);
+          return true;
+        }
       }
     }
     return false;
@@ -1117,6 +1180,41 @@ function respawnBall(state: PhysicsWorldState) {
   state.ball = createInitialBall(state.ballStart);
   state.status = 'playing';
   state.deathTimer = 0;
+  // Brief immunity window so a freshly respawned ball never dies instantly
+  // to a beam crossing the spawn point — the shield ring telegraphs it.
+  state.respawnGrace = RESPAWN_GRACE;
+}
+
+/**
+ * Assist mode: instead of dying, bounce the ball out of a lethal zone toward
+ * its nearest edge, grant short i-frames, and dress it with a ripple.
+ */
+function knockBallOutOfZone(
+  state: PhysicsWorldState,
+  _zx: number, _zy: number, _zw: number, _zh: number
+) {
+  // Rescue semantics: the field REJECTS the ball back the way it came —
+  // an impulse exactly opposite to the current gravity direction. This is
+  // robust for every orientation (floor pits, wall-mounted slabs, rotated
+  // worlds) and reads intuitively: "the fall was undone".
+  const gl = Math.hypot(Math.sin(state.gravityAngle), Math.cos(state.gravityAngle)) || 1;
+  const nx = -Math.sin(state.gravityAngle) / gl;
+  const ny = -Math.cos(state.gravityAngle) / gl;
+  state.ball.vx = nx * 420;
+  state.ball.vy = ny * 420;
+  state.ball.x += nx * 6;
+  state.ball.y += ny * 6;
+  state.respawnGrace = 0.6;
+  state.ripples.push({
+    x: state.ball.x,
+    y: state.ball.y,
+    radius: 8,
+    maxRadius: 44,
+    alpha: 0.9,
+    color: 'rgba(52, 211, 153, 0.85)',
+    lineWidth: 2
+  });
+  sound.playImpact(120);
 }
 
 /**
@@ -1147,8 +1245,8 @@ function spawnImpactParticles(state: PhysicsWorldState, x: number, y: number, co
 }
 
 function spawnStarParticles(state: PhysicsWorldState, x: number, y: number) {
-  for (let i = 0; i < 18; i++) {
-    const angle = (i / 18) * Math.PI * 2;
+  for (let i = 0; i < 14; i++) {
+    const angle = (i / 14) * Math.PI * 2;
     const speed = 70 + Math.random() * 90;
     pushParticle(state, {
       x,
@@ -1159,7 +1257,24 @@ function spawnStarParticles(state: PhysicsWorldState, x: number, y: number) {
       maxLife: 0.9,
       size: 3,
       color: 'rgba(251, 191, 36, 0.95)',
-      shape: 'square'
+      shape: 'diamond',
+      angle: Math.random() * Math.PI
+    });
+  }
+  // Sparkling accent ring of tiny circles
+  for (let i = 0; i < 6; i++) {
+    const angle = (i / 6) * Math.PI * 2 + 0.5;
+    const speed = 110 + Math.random() * 60;
+    pushParticle(state, {
+      x,
+      y,
+      vx: Math.cos(angle) * speed,
+      vy: Math.sin(angle) * speed,
+      life: 0.4 + Math.random() * 0.2,
+      maxLife: 0.6,
+      size: 1.6,
+      color: 'rgba(253, 230, 138, 0.9)',
+      shape: 'circle'
     });
   }
 }
@@ -1182,7 +1297,8 @@ function spawnDebrisParticles(
       maxLife: big ? 0.8 : 0.6,
       size: big ? 3.5 : 2.5,
       color: big ? 'rgba(251, 191, 36, 0.95)' : 'rgba(251, 191, 36, 0.7)',
-      shape: 'square'
+      shape: 'triangle',
+      angle: Math.random() * Math.PI * 2
     });
   }
 }
@@ -1191,11 +1307,12 @@ export function triggerDeath(state: PhysicsWorldState) {
   if (state.status !== 'playing') return;
   state.status = 'dying';
   state.deathTimer = 0;
+  state.deathCount += 1;
   state.ball.dead = true;
   sound.playLaserHit();
   addShake(state, 7, 0.4);
 
-  // Geometric explosion
+  // Geometric explosion: shattering line shards + rotating triangles
   for (let i = 0; i < 24; i++) {
     const angle = (i / 24) * Math.PI * 2;
     const speed = 100 + Math.random() * 140;
@@ -1210,6 +1327,22 @@ export function triggerDeath(state: PhysicsWorldState) {
       color: 'rgba(239, 68, 68, 0.9)',
       shape: 'line',
       angle
+    });
+  }
+  for (let i = 0; i < 8; i++) {
+    const angle = Math.random() * Math.PI * 2;
+    const speed = 60 + Math.random() * 120;
+    pushParticle(state, {
+      x: state.ball.x,
+      y: state.ball.y,
+      vx: Math.cos(angle) * speed,
+      vy: Math.sin(angle) * speed,
+      life: 0.6,
+      maxLife: 0.6,
+      size: 4,
+      color: 'rgba(244, 63, 94, 0.75)',
+      shape: 'triangle',
+      angle: Math.random() * Math.PI * 2
     });
   }
 

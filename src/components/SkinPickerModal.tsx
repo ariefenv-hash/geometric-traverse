@@ -1,14 +1,17 @@
 import React, { useEffect, useState } from 'react';
-import { Palette, Check, X, Sparkles } from 'lucide-react';
+import { Palette, Check, X, Sparkles, Lock } from 'lucide-react';
 import { ThemeMode } from '../game/types';
 import {
-  BALL_SKINS, CLASSIC_SKIN_ID, getSelectedSkinId, setSelectedSkinId, getSkinSvg
+  BALL_SKINS, CLASSIC_SKIN_ID, getSelectedSkinId, setSelectedSkinId, getSkinSvg,
+  isSkinUnlocked, UnlockStats
 } from '../game/skins';
 
 interface SkinPickerModalProps {
   isOpen: boolean;
   onClose: () => void;
   theme: ThemeMode;
+  /** Campaign aggregates evaluating the achievement gates. */
+  unlockStats: UnlockStats;
 }
 
 /** Miniature stand-in for the original procedural star-core (picker preview). */
@@ -30,7 +33,7 @@ function ClassicPreview() {
  * Selection persists instantly (localStorage) and applies to the live
  * renderer on the next frame (renderer reads the selection each draw).
  */
-export const SkinPickerModal: React.FC<SkinPickerModalProps> = ({ isOpen, onClose, theme }) => {
+export const SkinPickerModal: React.FC<SkinPickerModalProps> = ({ isOpen, onClose, theme, unlockStats }) => {
   const [selected, setSelected] = useState<string>(CLASSIC_SKIN_ID);
 
   // Fresh read each open so external changes (e.g. cache purge) are reflected.
@@ -115,21 +118,27 @@ export const SkinPickerModal: React.FC<SkinPickerModalProps> = ({ isOpen, onClos
           {/* 10 showcase skins */}
           {BALL_SKINS.map((skin) => {
             const isSel = selected === skin.id;
+            const locked = !isSkinUnlocked(skin, unlockStats);
             const svg = getSkinSvg(skin.id);
             return (
               <button
                 key={skin.id}
-                onClick={() => choose(skin.id)}
-                title={skin.desc}
+                onClick={() => { if (!locked) choose(skin.id); }}
+                title={locked ? `${skin.unlock?.hint ?? '尚未解锁'}：${skin.desc}` : skin.desc}
                 className={`group relative rounded-xl border p-3 flex flex-col items-center text-left transition-all ${
                   isSel
                     ? 'bg-white/[0.04] shadow-[0_0_18px_rgba(56,189,248,0.12)]'
                     : isDark
                       ? 'border-stone-800 bg-stone-950/40 hover:border-stone-600'
                       : 'border-stone-200 bg-stone-50 hover:border-stone-400'
-                }`}
+                } ${locked ? 'opacity-55 cursor-not-allowed' : ''}`}
                 style={isSel ? { borderColor: skin.accent, boxShadow: `0 0 18px ${skin.accent}22` } : undefined}
               >
+                {locked && (
+                  <span className="absolute top-2 right-2 p-1 rounded-full bg-stone-800/90 text-stone-400 border border-stone-700">
+                    <Lock className="w-3 h-3" />
+                  </span>
+                )}
                 {isSel && (
                   <span
                     className="absolute top-2 right-2 p-0.5 rounded-full text-stone-950"
@@ -150,7 +159,14 @@ export const SkinPickerModal: React.FC<SkinPickerModalProps> = ({ isOpen, onClos
                     <span className="text-[8px] text-stone-500 truncate uppercase tracking-wide">{skin.type}</span>
                   </div>
                   <div className="text-xs font-semibold text-stone-100 dark:text-stone-100 light:text-stone-900 mt-0.5">{skin.name}</div>
-                  <div className="text-[10px] text-stone-500 leading-snug mt-0.5 line-clamp-2">{skin.desc}</div>
+                  {locked ? (
+                    <div className="text-[10px] leading-snug mt-0.5 text-amber-300/90 flex items-start gap-1">
+                      <Lock className="w-2.5 h-2.5 mt-0.5 shrink-0" />
+                      <span>{skin.unlock?.label} · {skin.unlock?.hint}</span>
+                    </div>
+                  ) : (
+                    <div className="text-[10px] text-stone-500 leading-snug mt-0.5 line-clamp-2">{skin.desc}</div>
+                  )}
                 </div>
               </button>
             );
@@ -162,7 +178,7 @@ export const SkinPickerModal: React.FC<SkinPickerModalProps> = ({ isOpen, onClos
           <div className="flex items-center gap-1.5 text-[11px] text-stone-500">
             <Sparkles className="w-3.5 h-3.5 text-amber-300" />
             当前使用：<span className="text-stone-300 dark:text-stone-300 light:text-stone-700 font-medium">{currentName}</span>
-            <span className="hidden sm:inline">· 皮肤仅改变外观，不影响物理判定</span>
+            <span className="hidden sm:inline">· 星核皮肤中藏有三款成就奖励，在关卡中证明你的贯穿技艺吧</span>
           </div>
           <button
             onClick={onClose}

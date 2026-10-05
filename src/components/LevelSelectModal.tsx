@@ -218,6 +218,20 @@ export const LevelSelectModal: React.FC<LevelSelectModalProps> = ({
                           }`}
                         />
                       ))}
+                      {p.bestRating && (
+                        <span
+                          className={`ml-1 w-4 h-4 rounded-[4px] flex items-center justify-center text-[9px] font-extrabold border ${
+                            p.bestRating === 'S'
+                              ? 'border-amber-400/60 text-amber-300 bg-amber-400/10'
+                              : p.bestRating === 'A'
+                              ? 'border-sky-400/50 text-sky-300 bg-sky-400/10'
+                              : 'border-stone-500/40 text-stone-400 bg-stone-500/10'
+                          }`}
+                          title={`棱镜评级 ${p.bestRating}`}
+                        >
+                          {p.bestRating}
+                        </span>
+                      )}
                     </div>
 
                     {p.completed && p.bestRotations > 0 ? (
