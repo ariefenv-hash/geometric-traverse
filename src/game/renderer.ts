@@ -1,14 +1,23 @@
 import {
+  AnyObstacle,
+  BumperObstacle,
+  FragileWallObstacle,
+  LaserEmitterObstacle,
   LaserRay,
+  LinkedGateObstacle,
+  MirrorObstacle,
+  ObstacleType,
+  OneWayGateObstacle,
   Particle,
   PhaseBarrierObstacle,
   PhysicsWorldState,
   PortalObstacle,
+  PressurePlateObstacle,
   RippleEffect,
   SlidingBlockObstacle,
   ThemeMode
 } from './types';
-import { isPhaseBarrierSolid } from './physics';
+import { emitterBeamDir, isPhaseBarrierSolid, mirrorSurfaceSegment } from './physics';
 
 export interface RenderContext {
   ctx: CanvasRenderingContext2D;
@@ -16,6 +25,104 @@ export interface RenderContext {
   height: number;
   theme: ThemeMode;
   visualRotation: number; // Current visual camera angle (radians)
+  /** Impact camera shake offset in screen px (applied to the arena camera, not the backdrop). */
+  shakeX?: number;
+  shakeY?: number;
+}
+
+// ---------------------------------------------------------------------------
+// Obstacle render registry
+// ---------------------------------------------------------------------------
+// Every obstacle type maps to one or more { layer, draw } entries. The
+// pipeline is flattened and depth-sorted once at module load; adding a new
+// mechanism only requires registering a draw entry here.
+
+type ObstacleDrawFn = (
+  ctx: CanvasRenderingContext2D,
+  obs: AnyObstacle,
+  state: PhysicsWorldState,
+  isDark: boolean,
+  time: number
+) => void;
+
+interface RenderEntry {
+  layer: number;
+  draw: ObstacleDrawFn;
+}
+
+const OBSTACLE_RENDERERS: Partial<Record<ObstacleType, RenderEntry[]>> = {
+  anti_gravity: [
+    {
+      layer: 0,
+      draw: (ctx, obs, _s, isDark, time) =>
+        drawAntiGravityWell(ctx, obs.x, obs.y, obs.width, obs.height, isDark, time)
+    }
+  ],
+  sliding_block: [
+    { layer: 1, draw: (ctx, obs, _s, isDark) => drawSlidingRail(ctx, obs as SlidingBlockObstacle, isDark) },
+    { layer: 5, draw: (ctx, obs, _s, isDark) => drawSlidingBlock(ctx, obs as SlidingBlockObstacle, isDark) }
+  ],
+  portal: [
+    { layer: 2, draw: (ctx, obs, _s, isDark, time) => drawPortal(ctx, obs as PortalObstacle, isDark, time) }
+  ],
+  pressure_plate: [
+    { layer: 2.5, draw: (ctx, obs, _s, isDark, time) => drawPressurePlate(ctx, obs as PressurePlateObstacle, isDark, time) }
+  ],
+  phase_barrier: [
+    {
+      layer: 4,
+      draw: (ctx, obs, state, isDark, time) => {
+        const pb = obs as PhaseBarrierObstacle;
+        drawPhaseBarrier(ctx, pb, isPhaseBarrierSolid(pb, state.gravityAngle), isDark, time);
+      }
+    }
+  ],
+  bumper: [
+    { layer: 5, draw: (ctx, obs, _s, isDark, time) => drawBumper(ctx, obs as BumperObstacle, isDark, time) }
+  ],
+  one_way_gate: [
+    { layer: 5, draw: (ctx, obs, state, isDark, time) => drawOneWayGate(ctx, obs as OneWayGateObstacle, state, isDark, time) }
+  ],
+  mirror: [
+    { layer: 5, draw: (ctx, obs, _s, isDark, time) => drawMirror(ctx, obs as MirrorObstacle, isDark, time) }
+  ],
+  wall: [
+    { layer: 6, draw: (ctx, obs, _s, isDark) => drawWall(ctx, obs.x, obs.y, obs.width, obs.height, isDark) }
+  ],
+  fragile_wall: [
+    { layer: 6, draw: (ctx, obs, _s, isDark, time) => drawFragileWall(ctx, obs as FragileWallObstacle, isDark, time) }
+  ],
+  linked_gate: [
+    { layer: 6, draw: (ctx, obs, _s, isDark, time) => drawLinkedGate(ctx, obs as LinkedGateObstacle, isDark, time) }
+  ]
+};
+
+const UNDERLAY_CUTOFF = 3; // layers < cutoff draw beneath exit/stars/lasers
+
+const RENDER_PIPELINE: Array<RenderEntry & { type: ObstacleType }> = Object.entries(
+  OBSTACLE_RENDERERS
+)
+  .flatMap(([type, entries]) =>
+    (entries || []).map(entry => ({ type: type as ObstacleType, ...entry }))
+  )
+  .sort((a, b) => a.layer - b.layer);
+
+function runRenderPipeline(
+  ctx: CanvasRenderingContext2D,
+  state: PhysicsWorldState,
+  isDark: boolean,
+  time: number,
+  belowCutoff: boolean
+) {
+  for (const entry of RENDER_PIPELINE) {
+    const inRange = belowCutoff ? entry.layer < UNDERLAY_CUTOFF : entry.layer >= UNDERLAY_CUTOFF;
+    if (!inRange) continue;
+    for (const obs of state.obstacles) {
+      if (obs.type !== entry.type) continue;
+      if (obs.type === 'fragile_wall' && (obs as FragileWallObstacle).broken) continue;
+      entry.draw(ctx, obs, state, isDark, time);
+    }
+  }
 }
 
 export function renderGame(
@@ -42,85 +149,46 @@ export function renderGame(
   const margin = Math.min(width, height) < 600 ? 24 : 48;
   const scale = Math.min((width - margin) / arenaWidth, (height - margin) / arenaHeight);
 
-  ctx.translate(centerX, centerY);
+  ctx.translate(centerX + (rCtx.shakeX ?? 0), centerY + (rCtx.shakeY ?? 0));
   // Rotate arena so "down" relative to gravity is aligned, or smooth rotation
   ctx.rotate(-visualRotation);
   ctx.scale(scale, scale);
   ctx.translate(-arenaWidth / 2, -arenaHeight / 2);
 
+  const time = state.elapsedTime;
+
   // 1. Draw Geometric Drafting Grid & Celestial Compass Rings
-  drawBackgroundGrid(ctx, arenaWidth, arenaHeight, isDark, state.elapsedTime);
+  drawBackgroundGrid(ctx, arenaWidth, arenaHeight, isDark, time);
 
-  // 2. Draw Anti-Gravity Wells
-  for (const obs of state.obstacles) {
-    if (obs.type === 'anti_gravity') {
-      drawAntiGravityWell(ctx, obs.x, obs.y, obs.width, obs.height, isDark, state.elapsedTime);
-    }
-  }
+  // 2. Underlay obstacle layers (anti-gravity wells, rails, portals, plates)
+  runRenderPipeline(ctx, state, isDark, time, true);
 
-  // 3. Draw Sliding Block Rail Slots
-  for (const obs of state.obstacles) {
-    if (obs.type === 'sliding_block') {
-      const sb = obs as SlidingBlockObstacle;
-      drawSlidingRail(ctx, sb, isDark);
-    }
-  }
+  // 3. Draw Exit Gate (Monolith)
+  drawExitGate(ctx, state.exit, isDark, time);
 
-  // 4. Draw Portals
-  for (const obs of state.obstacles) {
-    if (obs.type === 'portal') {
-      const p = obs as PortalObstacle;
-      drawPortal(ctx, p, isDark, state.elapsedTime);
-    }
-  }
-
-  // 5. Draw Exit Gate (Monolith)
-  drawExitGate(ctx, state.exit, isDark, state.elapsedTime);
-
-  // 6. Draw Stars (Celestial Cores)
+  // 4. Draw Stars (Celestial Cores)
   for (const star of state.stars) {
     if (!star.collected) {
-      drawStar(ctx, star.x, star.y, star.radius, isDark, state.elapsedTime + star.pulsePhase);
+      drawStar(ctx, star.x, star.y, star.radius, isDark, time + star.pulsePhase);
     }
   }
 
-  // 7. Draw Lasers & Emitters
-  drawLasers(ctx, state.lasers, state.obstacles, isDark, state.elapsedTime);
+  // 5. Draw Lasers & Emitters
+  drawLasers(ctx, state.lasers, state.obstacles, isDark, time);
 
-  // 8. Draw Phase Barriers
-  for (const obs of state.obstacles) {
-    if (obs.type === 'phase_barrier') {
-      const pb = obs as PhaseBarrierObstacle;
-      const isSolid = isPhaseBarrierSolid(pb, state.gravityAngle);
-      drawPhaseBarrier(ctx, pb, isSolid, isDark, state.elapsedTime);
-    }
-  }
+  // 6. Overlay obstacle layers (phase barriers, blocks, walls, mechanisms)
+  runRenderPipeline(ctx, state, isDark, time, false);
 
-  // 9. Draw Sliding Blocks
-  for (const obs of state.obstacles) {
-    if (obs.type === 'sliding_block') {
-      const sb = obs as SlidingBlockObstacle;
-      drawSlidingBlock(ctx, sb, isDark);
-    }
-  }
-
-  // 10. Draw Solid Walls
-  for (const obs of state.obstacles) {
-    if (obs.type === 'wall') {
-      drawWall(ctx, obs.x, obs.y, obs.width, obs.height, isDark);
-    }
-  }
-
-  // 11. Draw Ball (Protagonist)
+  // 7. Draw Ball (Protagonist)
   if (!state.ball.dead) {
     drawBall(ctx, state, isDark);
   }
 
-  // 12. Draw Ripples and Particles
+  // 8. Draw Ripples and Particles
   drawRipples(ctx, state.ripples);
   drawParticles(ctx, state.particles);
 
-  // 13. Draw Arena Outer Bounding Frame
+  // 9. Draw Arena Outer Bounding Frame
   drawArenaBorder(ctx, arenaWidth, arenaHeight, isDark);
 
   ctx.restore();
@@ -221,7 +289,7 @@ function drawArenaBorder(
   // Geometric corner accents
   const cornerSize = 14;
   ctx.fillStyle = isDark ? '#38bdf8' : '#0f172a';
-  
+
   // Top-left
   ctx.fillRect(-2, -2, cornerSize, 3);
   ctx.fillRect(-2, -2, 3, cornerSize);
@@ -275,6 +343,354 @@ function drawWall(
 
   ctx.restore();
 }
+
+// ---------------------------------------------------------------------------
+// New mechanism renderers
+// ---------------------------------------------------------------------------
+
+function drawBumper(
+  ctx: CanvasRenderingContext2D,
+  bp: BumperObstacle,
+  isDark: boolean,
+  time: number
+) {
+  ctx.save();
+  const base = isDark ? '#34d399' : '#059669';
+  const horizontal = bp.width >= bp.height;
+
+  // Base pad
+  ctx.fillStyle = isDark ? 'rgba(52, 211, 153, 0.16)' : 'rgba(5, 150, 105, 0.14)';
+  ctx.fillRect(bp.x, bp.y, bp.width, bp.height);
+  ctx.strokeStyle = base;
+  ctx.lineWidth = 2;
+  ctx.strokeRect(bp.x, bp.y, bp.width, bp.height);
+
+  // Animated chevrons pointing along the boost direction
+  const spacing = 16;
+  const offset = (time * 40) % spacing;
+  ctx.strokeStyle = isDark ? 'rgba(52, 211, 153, 0.75)' : 'rgba(5, 150, 105, 0.7)';
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+
+  const len = horizontal ? bp.width : bp.height;
+  for (let d = offset; d < len; d += spacing) {
+    if (bp.direction === 'right') {
+      const x = bp.x + d;
+      ctx.moveTo(x - 4, bp.y + 3);
+      ctx.lineTo(x + 2, bp.y + bp.height / 2);
+      ctx.lineTo(x - 4, bp.y + bp.height - 3);
+    } else if (bp.direction === 'left') {
+      const x = bp.x + bp.width - d;
+      ctx.moveTo(x + 4, bp.y + 3);
+      ctx.lineTo(x - 2, bp.y + bp.height / 2);
+      ctx.lineTo(x + 4, bp.y + bp.height - 3);
+    } else if (bp.direction === 'down') {
+      const y = bp.y + d;
+      ctx.moveTo(bp.x + 3, y - 4);
+      ctx.lineTo(bp.x + bp.width / 2, y + 2);
+      ctx.lineTo(bp.x + bp.width - 3, y - 4);
+    } else {
+      const y = bp.y + bp.height - d;
+      ctx.moveTo(bp.x + 3, y + 4);
+      ctx.lineTo(bp.x + bp.width / 2, y - 2);
+      ctx.lineTo(bp.x + bp.width - 3, y + 4);
+    }
+  }
+  ctx.stroke();
+
+  // Pulse aura
+  const pulse = 0.10 + Math.sin(time * 5) * 0.05;
+  ctx.fillStyle = isDark ? `rgba(52, 211, 153, ${pulse})` : `rgba(5, 150, 105, ${pulse})`;
+  ctx.fillRect(bp.x - 2, bp.y - 2, bp.width + 4, bp.height + 4);
+
+  ctx.restore();
+}
+
+function drawOneWayGate(
+  ctx: CanvasRenderingContext2D,
+  gate: OneWayGateObstacle,
+  state: PhysicsWorldState,
+  isDark: boolean,
+  time: number
+) {
+  ctx.save();
+  const horizontal = gate.width >= gate.height;
+  const dirSign =
+    gate.passDirection === 'right' || gate.passDirection === 'down' ? 1 : -1;
+
+  const vel = horizontal ? state.ball.vx : state.ball.vy;
+  const tol = gate.tolerance ?? 30;
+  const permeable = vel * dirSign > tol;
+
+  const solidColor = isDark ? 'rgba(148, 163, 184, 0.9)' : 'rgba(71, 85, 105, 0.85)';
+  const fillColor = isDark ? 'rgba(51, 65, 85, 0.9)' : 'rgba(148, 163, 184, 0.6)';
+
+  if (permeable) {
+    // Ethereal dashed outline
+    ctx.strokeStyle = isDark ? 'rgba(148, 163, 184, 0.35)' : 'rgba(71, 85, 105, 0.3)';
+    ctx.lineWidth = 1.5;
+    ctx.setLineDash([4, 5]);
+    ctx.strokeRect(gate.x, gate.y, gate.width, gate.height);
+    ctx.setLineDash([]);
+  } else {
+    ctx.fillStyle = fillColor;
+    ctx.fillRect(gate.x, gate.y, gate.width, gate.height);
+    ctx.strokeStyle = solidColor;
+    ctx.lineWidth = 2;
+    ctx.strokeRect(gate.x, gate.y, gate.width, gate.height);
+  }
+
+  // Animated flow arrows along pass direction (always visible for readability)
+  const spacing = 14;
+  const offset = (time * 26) % spacing;
+  ctx.strokeStyle = permeable
+    ? (isDark ? 'rgba(56, 189, 248, 0.85)' : 'rgba(2, 132, 199, 0.8)')
+    : (isDark ? 'rgba(226, 232, 240, 0.7)' : 'rgba(241, 245, 249, 0.9)');
+  ctx.lineWidth = 1.6;
+  ctx.beginPath();
+
+  const len = horizontal ? gate.width : gate.height;
+  for (let d = offset; d < len; d += spacing) {
+    if (horizontal) {
+      const x = dirSign > 0 ? gate.x + d : gate.x + gate.width - d;
+      if (dirSign > 0) {
+        ctx.moveTo(x - 3, gate.y + 2);
+        ctx.lineTo(x + 2, gate.y + gate.height / 2);
+        ctx.lineTo(x - 3, gate.y + gate.height - 2);
+      } else {
+        ctx.moveTo(x + 3, gate.y + 2);
+        ctx.lineTo(x - 2, gate.y + gate.height / 2);
+        ctx.lineTo(x + 3, gate.y + gate.height - 2);
+      }
+    } else {
+      const y = dirSign > 0 ? gate.y + d : gate.y + gate.height - d;
+      if (dirSign > 0) {
+        ctx.moveTo(gate.x + 2, y - 3);
+        ctx.lineTo(gate.x + gate.width / 2, y + 2);
+        ctx.lineTo(gate.x + gate.width - 2, y - 3);
+      } else {
+        ctx.moveTo(gate.x + 2, y + 3);
+        ctx.lineTo(gate.x + gate.width / 2, y - 2);
+        ctx.lineTo(gate.x + gate.width - 2, y + 3);
+      }
+    }
+  }
+  ctx.stroke();
+
+  ctx.restore();
+}
+
+function drawFragileWall(
+  ctx: CanvasRenderingContext2D,
+  fw: FragileWallObstacle,
+  isDark: boolean,
+  time: number
+) {
+  ctx.save();
+  const maxHp = fw.maxHp || fw.hp;
+  const damage = 1 - Math.max(0, Math.min(1, fw.hp / maxHp));
+
+  // Amber-tinted masonry
+  ctx.fillStyle = isDark ? `rgba(120, 88, 40, ${0.9 - damage * 0.25})` : `rgba(217, 164, 84, ${0.85 - damage * 0.2})`;
+  ctx.fillRect(fw.x, fw.y, fw.width, fw.height);
+
+  ctx.strokeStyle = isDark ? 'rgba(251, 191, 36, 0.55)' : 'rgba(180, 121, 18, 0.6)';
+  ctx.lineWidth = 1.5;
+  ctx.strokeRect(fw.x, fw.y, fw.width, fw.height);
+
+  // Masonry brick joints
+  ctx.strokeStyle = isDark ? 'rgba(0, 0, 0, 0.28)' : 'rgba(120, 78, 12, 0.25)';
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  const brickH = 10;
+  if (fw.height >= fw.width) {
+    for (let by = brickH; by < fw.height; by += brickH) {
+      ctx.moveTo(fw.x, fw.y + by);
+      ctx.lineTo(fw.x + fw.width, fw.y + by);
+    }
+  } else {
+    for (let bx = brickH * 2; bx < fw.width; bx += brickH * 2) {
+      ctx.moveTo(fw.x + bx, fw.y);
+      ctx.lineTo(fw.x + bx, fw.y + fw.height);
+    }
+  }
+  ctx.stroke();
+
+  // Damage cracks: deterministic jagged polylines, denser with damage
+  if (damage > 0.01) {
+    ctx.strokeStyle = isDark ? 'rgba(253, 230, 138, 0.8)' : 'rgba(120, 66, 6, 0.75)';
+    ctx.lineWidth = 1.4;
+    ctx.beginPath();
+    const crackCount = Math.ceil(damage * 5);
+    const horizontal = fw.width >= fw.height;
+    for (let c = 0; c < crackCount; c++) {
+      const seed = (fw.x * 31 + fw.y * 17 + c * 977) % 100;
+      if (horizontal) {
+        let cx = fw.x + ((seed / 100) * fw.width);
+        let cy = fw.y + 2;
+        ctx.moveTo(cx, cy);
+        for (let s = 0; s < 4; s++) {
+          cx += ((seed * (s + 3)) % 11) - 5;
+          cy += (fw.height - 4) / 4;
+          ctx.lineTo(cx, cy);
+        }
+      } else {
+        let cx = fw.x + 2;
+        let cy = fw.y + ((seed / 100) * fw.height);
+        ctx.moveTo(cx, cy);
+        for (let s = 0; s < 4; s++) {
+          cx += (fw.width - 4) / 4;
+          cy += ((seed * (s + 5)) % 11) - 5;
+          ctx.lineTo(cx, cy);
+        }
+      }
+    }
+    ctx.stroke();
+  }
+
+  // Faint life shimmer when close to breaking
+  if (fw.hp === 1) {
+    const pulse = 0.12 + Math.sin(time * 8) * 0.08;
+    ctx.fillStyle = `rgba(248, 113, 113, ${pulse})`;
+    ctx.fillRect(fw.x, fw.y, fw.width, fw.height);
+  }
+
+  ctx.restore();
+}
+
+function drawPressurePlate(
+  ctx: CanvasRenderingContext2D,
+  plate: PressurePlateObstacle,
+  isDark: boolean,
+  time: number
+) {
+  ctx.save();
+  const pressed = !!plate.pressed;
+  const accent = isDark ? '#a78bfa' : '#7c3aed';
+
+  // Recessed slot
+  ctx.fillStyle = isDark ? 'rgba(0, 0, 0, 0.35)' : 'rgba(15, 23, 42, 0.12)';
+  ctx.fillRect(plate.x, plate.y, plate.width, plate.height);
+  ctx.strokeStyle = isDark ? 'rgba(167, 139, 250, 0.3)' : 'rgba(124, 58, 237, 0.3)';
+  ctx.lineWidth = 1;
+  ctx.strokeRect(plate.x, plate.y, plate.width, plate.height);
+
+  // Cap: sinks when pressed
+  const inset = pressed ? 5 : 2.5;
+  ctx.fillStyle = pressed
+    ? (isDark ? 'rgba(167, 139, 250, 0.45)' : 'rgba(124, 58, 237, 0.4)')
+    : (isDark ? 'rgba(88, 74, 141, 0.85)' : 'rgba(160, 140, 220, 0.8)');
+  ctx.fillRect(plate.x + inset, plate.y + inset, plate.width - inset * 2, plate.height - inset * 2);
+
+  ctx.strokeStyle = accent;
+  ctx.lineWidth = pressed ? 2 : 1.5;
+  ctx.strokeRect(plate.x + inset, plate.y + inset, plate.width - inset * 2, plate.height - inset * 2);
+
+  // Signal glyph: latch plates show a diamond, momentary show a dot
+  const cx = plate.x + plate.width / 2;
+  const cy = plate.y + plate.height / 2;
+  ctx.fillStyle = pressed ? '#f5f3ff' : accent;
+  if (plate.latch) {
+    ctx.beginPath();
+    ctx.moveTo(cx, cy - 4);
+    ctx.lineTo(cx + 4, cy);
+    ctx.lineTo(cx, cy + 4);
+    ctx.lineTo(cx - 4, cy);
+    ctx.closePath();
+    ctx.fill();
+  } else {
+    ctx.beginPath();
+    ctx.arc(cx, cy, 2.5, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  // Soft glow when pressed
+  if (pressed) {
+    const glow = 0.15 + Math.sin(time * 6) * 0.06;
+    ctx.fillStyle = isDark ? `rgba(167, 139, 250, ${glow})` : `rgba(124, 58, 237, ${glow})`;
+    ctx.fillRect(plate.x - 3, plate.y - 3, plate.width + 6, plate.height + 6);
+  }
+
+  ctx.restore();
+}
+
+function drawLinkedGate(
+  ctx: CanvasRenderingContext2D,
+  gate: LinkedGateObstacle,
+  isDark: boolean,
+  time: number
+) {
+  ctx.save();
+  const open = !!gate.open;
+  const accent = isDark ? '#a78bfa' : '#7c3aed';
+
+  if (open) {
+    // Retracted: faint dashed ghost + passage arrows
+    ctx.strokeStyle = isDark ? 'rgba(167, 139, 250, 0.3)' : 'rgba(124, 58, 237, 0.3)';
+    ctx.lineWidth = 1.5;
+    ctx.setLineDash([3, 6]);
+    ctx.strokeRect(gate.x, gate.y, gate.width, gate.height);
+    ctx.setLineDash([]);
+
+    const horizontal = gate.width >= gate.height;
+    const offset = (time * 30) % 18;
+    ctx.strokeStyle = isDark ? 'rgba(167, 139, 250, 0.5)' : 'rgba(124, 58, 237, 0.45)';
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    if (horizontal) {
+      for (let x = gate.x + offset; x < gate.x + gate.width; x += 18) {
+        ctx.moveTo(x, gate.y + gate.height / 2 - 3);
+        ctx.lineTo(x + 5, gate.y + gate.height / 2);
+        ctx.lineTo(x, gate.y + gate.height / 2 + 3);
+      }
+    } else {
+      for (let y = gate.y + offset; y < gate.y + gate.height; y += 18) {
+        ctx.moveTo(gate.x + gate.width / 2 - 3, y);
+        ctx.lineTo(gate.x + gate.width / 2, y + 5);
+        ctx.lineTo(gate.x + gate.width / 2 + 3, y);
+      }
+    }
+    ctx.stroke();
+  } else {
+    // Closed: violet energy slab with hazard chevrons
+    ctx.fillStyle = isDark ? 'rgba(58, 46, 99, 0.95)' : 'rgba(124, 108, 180, 0.75)';
+    ctx.fillRect(gate.x, gate.y, gate.width, gate.height);
+    ctx.strokeStyle = accent;
+    ctx.lineWidth = 2;
+    ctx.strokeRect(gate.x, gate.y, gate.width, gate.height);
+
+    ctx.strokeStyle = isDark ? 'rgba(167, 139, 250, 0.4)' : 'rgba(240, 235, 255, 0.5)';
+    ctx.lineWidth = 1.5;
+    const step = 14;
+    ctx.beginPath();
+    for (let offset = -gate.height; offset < gate.width; offset += step) {
+      const x1 = Math.max(gate.x, gate.x + offset);
+      const y1 = gate.y + Math.max(0, -offset);
+      const x2 = Math.min(gate.x + gate.width, gate.x + offset + gate.height);
+      const y2 = gate.y + Math.min(gate.height, gate.height - offset);
+      if (x1 < gate.x + gate.width && y2 > gate.y) {
+        ctx.moveTo(x1, y1);
+        ctx.lineTo(x2, y2);
+      }
+    }
+    ctx.stroke();
+
+    // Lock core
+    const cx = gate.x + gate.width / 2;
+    const cy = gate.y + gate.height / 2;
+    const pulse = 0.5 + Math.sin(time * 4) * 0.2;
+    ctx.fillStyle = isDark ? `rgba(233, 213, 255, ${pulse})` : `rgba(255, 255, 255, ${pulse})`;
+    ctx.beginPath();
+    ctx.arc(cx, cy, 3, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  ctx.restore();
+}
+
+// ---------------------------------------------------------------------------
+// Legacy / shared draw functions
+// ---------------------------------------------------------------------------
 
 function drawPhaseBarrier(
   ctx: CanvasRenderingContext2D,
@@ -400,7 +816,7 @@ function drawSlidingBlock(
   const cx = sb.x + sb.width / 2;
   const cy = sb.y + sb.height / 2;
   ctx.fillStyle = isDark ? '#0f172a' : '#64748b';
-  
+
   if (sb.width >= sb.height) {
     ctx.fillRect(cx - 14, cy - 3, 28, 6);
   } else {
@@ -630,6 +1046,103 @@ function drawStar(
   ctx.restore();
 }
 
+function drawMirror(
+  ctx: CanvasRenderingContext2D,
+  m: MirrorObstacle,
+  isDark: boolean,
+  time: number
+) {
+  const seg = mirrorSurfaceSegment(m);
+
+  ctx.save();
+
+  // Faint housing box so the editable volume stays legible
+  ctx.strokeStyle = isDark ? 'rgba(148, 163, 184, 0.25)' : 'rgba(100, 116, 139, 0.28)';
+  ctx.lineWidth = 1;
+  ctx.strokeRect(m.x, m.y, m.width, m.height);
+
+  // Subtle aura behind the reflective face
+  ctx.shadowBlur = 10 + Math.sin(time * 2.2) * 3;
+  ctx.shadowColor = isDark ? 'rgba(165, 243, 252, 0.5)' : 'rgba(14, 165, 233, 0.35)';
+
+  // Reflective surface: metallic gradient stroke
+  const grad = ctx.createLinearGradient(seg.x1, seg.y1, seg.x2, seg.y2);
+  grad.addColorStop(0, isDark ? 'rgba(226, 232, 240, 0.9)' : 'rgba(71, 85, 105, 0.85)');
+  grad.addColorStop(0.5, isDark ? '#a5f3fc' : '#0ea5e9');
+  grad.addColorStop(1, isDark ? 'rgba(226, 232, 240, 0.9)' : 'rgba(71, 85, 105, 0.85)');
+  ctx.strokeStyle = grad;
+  ctx.lineWidth = 3.5;
+  ctx.lineCap = 'round';
+  ctx.beginPath();
+  ctx.moveTo(seg.x1, seg.y1);
+  ctx.lineTo(seg.x2, seg.y2);
+  ctx.stroke();
+
+  ctx.shadowBlur = 0;
+
+  // Travelling shimmer pulse along the surface
+  const shimmerT = ((time * 0.35) % 1 + 1) % 1;
+  const shX = seg.x1 + (seg.x2 - seg.x1) * shimmerT;
+  const shY = seg.y1 + (seg.y2 - seg.y1) * shimmerT;
+  ctx.fillStyle = 'rgba(255, 255, 255, 0.85)';
+  ctx.beginPath();
+  ctx.arc(shX, shY, 2.2, 0, Math.PI * 2);
+  ctx.fill();
+
+  // End mounts
+  ctx.fillStyle = isDark ? '#94a3b8' : '#64748b';
+  for (const [px, py] of [[seg.x1, seg.y1], [seg.x2, seg.y2]] as const) {
+    ctx.beginPath();
+    ctx.arc(px, py, 3, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  // Half-silvered (one-way) mirror: mark the silvered side with parallel
+  // accent ticks and the glass side with a faint dashed backing line.
+  const side = m.reflectSide ?? 'both';
+  if (side !== 'both') {
+    const rad = (m.angle * Math.PI) / 180;
+    const nx = -Math.sin(rad);
+    const ny = Math.cos(rad);
+    const sign = side === 'front' ? 1 : -1;
+    const offX = nx * sign * 7;
+    const offY = ny * sign * 7;
+
+    // Silvered side: short accent ticks parallel to the surface
+    ctx.shadowBlur = 6;
+    ctx.shadowColor = isDark ? 'rgba(165, 243, 252, 0.7)' : 'rgba(14, 165, 233, 0.5)';
+    ctx.strokeStyle = isDark ? 'rgba(165, 243, 252, 0.75)' : 'rgba(14, 165, 233, 0.6)';
+    ctx.lineWidth = 1.5;
+    const len = Math.hypot(seg.x2 - seg.x1, seg.y2 - seg.y1);
+    const ux = (seg.x2 - seg.x1) / len;
+    const uy = (seg.y2 - seg.y1) / len;
+    const tickCount = Math.max(2, Math.floor(len / 26));
+    for (let i = 0; i <= tickCount; i++) {
+      const t = (i + 0.5) / (tickCount + 1);
+      const bx = seg.x1 + (seg.x2 - seg.x1) * t;
+      const by = seg.y1 + (seg.y2 - seg.y1) * t;
+      const half = 5;
+      ctx.beginPath();
+      ctx.moveTo(bx - ux * half + offX, by - uy * half + offY);
+      ctx.lineTo(bx + ux * half + offX, by + uy * half + offY);
+      ctx.stroke();
+    }
+    ctx.shadowBlur = 0;
+
+    // Glass side: faint dashed line so the pass-through direction reads clearly
+    ctx.strokeStyle = isDark ? 'rgba(148, 163, 184, 0.35)' : 'rgba(100, 116, 139, 0.4)';
+    ctx.lineWidth = 1;
+    ctx.setLineDash([3, 5]);
+    ctx.beginPath();
+    ctx.moveTo(seg.x1 - offX, seg.y1 - offY);
+    ctx.lineTo(seg.x2 - offX, seg.y2 - offY);
+    ctx.stroke();
+    ctx.setLineDash([]);
+  }
+
+  ctx.restore();
+}
+
 function drawLasers(
   ctx: CanvasRenderingContext2D,
   lasers: LaserRay[],
@@ -637,17 +1150,28 @@ function drawLasers(
   isDark: boolean,
   time: number
 ) {
-  // Draw emitters
+  // Draw emitters: base housing + rotated barrel indicating beam direction
   for (const obs of obstacles) {
-    if (obs.type === 'laser_emitter') {
-      ctx.save();
-      ctx.fillStyle = isDark ? '#e11d48' : '#be123c';
-      ctx.fillRect(obs.x, obs.y, obs.width, obs.height);
-      ctx.strokeStyle = isDark ? '#fda4af' : '#ffe4e6';
-      ctx.lineWidth = 1.5;
-      ctx.strokeRect(obs.x, obs.y, obs.width, obs.height);
-      ctx.restore();
-    }
+    if (obs.type !== 'laser_emitter') continue;
+    const emitter = obs as LaserEmitterObstacle;
+    const { dx, dy } = emitterBeamDir(emitter);
+
+    ctx.save();
+    ctx.fillStyle = isDark ? '#e11d48' : '#be123c';
+    ctx.fillRect(obs.x, obs.y, obs.width, obs.height);
+    ctx.strokeStyle = isDark ? '#fda4af' : '#ffe4e6';
+    ctx.lineWidth = 1.5;
+    ctx.strokeRect(obs.x, obs.y, obs.width, obs.height);
+
+    ctx.translate(obs.x + obs.width / 2, obs.y + obs.height / 2);
+    ctx.rotate(Math.atan2(dy, dx));
+    ctx.fillStyle = isDark ? '#fb7185' : '#f43f5e';
+    ctx.fillRect(0, -3, Math.max(obs.width, obs.height) * 0.75, 6);
+    ctx.fillStyle = '#fff1f2';
+    ctx.beginPath();
+    ctx.arc(Math.max(obs.width, obs.height) * 0.75, 0, 2.4, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
   }
 
   // Draw beams

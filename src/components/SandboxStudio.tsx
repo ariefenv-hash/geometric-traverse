@@ -10,7 +10,18 @@ import {
   Layers,
   Shield,
   Eye,
-  Zap
+  Zap,
+  ChevronsUp,
+  DoorOpen,
+  DoorClosed,
+  BrickWall,
+  Target,
+  CircleDashed,
+  Skull,
+  Slash,
+  Share2,
+  Download,
+  Upload
 } from 'lucide-react';
 import { AnyObstacle, ObstacleType, ThemeMode } from '../game/types';
 
@@ -19,6 +30,8 @@ interface SandboxStudioProps {
   onClose: () => void;
   onApplySandboxConfig: (obstacles: AnyObstacle[], gravityScale: number, bounciness: number) => void;
   onResetSandbox: () => void;
+  onExportLevelCode: () => void;
+  onImportLevelCode: (code: string) => boolean;
   theme: ThemeMode;
 }
 
@@ -27,21 +40,33 @@ export const SandboxStudio: React.FC<SandboxStudioProps> = ({
   onClose,
   onApplySandboxConfig,
   onResetSandbox,
+  onExportLevelCode,
+  onImportLevelCode,
   theme
 }) => {
-  if (!isOpen) return null;
-  const isDark = theme === 'dark';
-
+  // Hooks must run unconditionally — early return below happens AFTER them,
+  // otherwise the first open crashes with a hook-order mismatch.
   const [selectedTool, setSelectedTool] = useState<ObstacleType>('wall');
   const [gravityScale, setGravityScale] = useState(1.0);
   const [bounciness, setBounciness] = useState(0.45);
+
+  if (!isOpen) return null;
+  const isDark = theme === 'dark';
 
   const tools: { type: ObstacleType; label: string; icon: React.ReactNode; desc: string }[] = [
     { type: 'wall', label: '实体黑曜石墙', icon: <Layers className="w-4 h-4" />, desc: '坚硬刚体，阻挡一切碰撞与光束' },
     { type: 'phase_barrier', label: '透光相界', icon: <Eye className="w-4 h-4" />, desc: '受重力方向控制的量子屏障，90°穿透' },
     { type: 'sliding_block', label: '动量滑块', icon: <Shield className="w-4 h-4" />, desc: '沿导轨滑动，可用作桥梁或挡光掩体' },
     { type: 'laser_emitter', label: '极光发射器', icon: <Zap className="w-4 h-4" />, desc: '持续发射致命红色聚焦激光' },
-    { type: 'anti_gravity', label: '反重力涌泉', icon: <Sparkles className="w-4 h-4" />, desc: '向上托举球体的蓝色引力波束' }
+    { type: 'anti_gravity', label: '反重力涌泉', icon: <Sparkles className="w-4 h-4" />, desc: '向上托举球体的蓝色引力波束' },
+    { type: 'bumper', label: '定向弹力垫', icon: <ChevronsUp className="w-4 h-4" />, desc: '将小球沿箭头方向高速弹射的翠色垫石' },
+    { type: 'one_way_gate', label: '单向闸门', icon: <DoorOpen className="w-4 h-4" />, desc: '只允许沿箭头方向穿越的涡流阀' },
+    { type: 'fragile_wall', label: '碎裂墙', icon: <BrickWall className="w-4 h-4" />, desc: '高速冲击可击碎的赭色脆壁，累计耐久' },
+    { type: 'pressure_plate', label: '压力板', icon: <Target className="w-4 h-4" />, desc: '感应球体重量的紫色机关，联动闸门' },
+    { type: 'linked_gate', label: '联动闸门', icon: <DoorClosed className="w-4 h-4" />, desc: '由压力板控制的紫色能量门扉' },
+    { type: 'portal', label: '折跃门', icon: <CircleDashed className="w-4 h-4" />, desc: '成对相连的紫色空间折跃通道' },
+    { type: 'hazard', label: '湮灭场', icon: <Skull className="w-4 h-4" />, desc: '触碰即碎裂的禁行区域' },
+    { type: 'mirror', label: '反射镜', icon: <Slash className="w-4 h-4" />, desc: '镜面将激光按入射角折返；可设为单面镀银，只折返一侧来光，另一侧放行' }
   ];
 
   const handleApplyPreset = (presetName: string) => {
@@ -169,6 +194,47 @@ export const SandboxStudio: React.FC<SandboxStudioProps> = ({
                 </div>
               </button>
             </div>
+          </div>
+        </div>
+
+        {/* Level Share Codes */}
+        <div className="mt-6 pt-5 border-t border-stone-800/60 dark:border-stone-800 light:border-stone-200">
+          <div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-violet-400">
+            <Share2 className="w-3.5 h-3.5" />
+            <span>关卡分享码</span>
+          </div>
+          <p className="text-[11px] text-stone-500 mt-1.5 leading-relaxed">
+            将当前关卡导出为 GT1 分享码，或粘贴他人分享码立即试玩。
+          </p>
+          <div className="grid grid-cols-2 gap-2.5 mt-3">
+            <button
+              onClick={onExportLevelCode}
+              className={`flex items-center justify-center gap-1.5 py-2.5 rounded-xl border text-xs font-medium transition-colors ${
+                isDark
+                  ? 'border-stone-800 hover:border-violet-500/50 bg-stone-950/40 hover:bg-stone-800/50 text-stone-300'
+                  : 'border-stone-200 hover:border-violet-500/50 bg-stone-50 hover:bg-stone-100 text-stone-700'
+              }`}
+            >
+              <Download className="w-3.5 h-3.5" />
+              <span>导出分享码</span>
+            </button>
+            <button
+              onClick={() => {
+                const code = window.prompt('粘贴关卡分享码 (GT1....)：');
+                if (!code) return;
+                const ok = onImportLevelCode(code);
+                if (ok) onClose();
+                else window.alert('分享码无效，请检查后重试。');
+              }}
+              className={`flex items-center justify-center gap-1.5 py-2.5 rounded-xl border text-xs font-medium transition-colors ${
+                isDark
+                  ? 'border-stone-800 hover:border-violet-500/50 bg-stone-950/40 hover:bg-stone-800/50 text-stone-300'
+                  : 'border-stone-200 hover:border-violet-500/50 bg-stone-50 hover:bg-stone-100 text-stone-700'
+              }`}
+            >
+              <Upload className="w-3.5 h-3.5" />
+              <span>导入分享码</span>
+            </button>
           </div>
         </div>
 

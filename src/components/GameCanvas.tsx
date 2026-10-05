@@ -1,7 +1,8 @@
 import React, { useRef, useEffect, useCallback } from 'react';
 import { PhysicsWorldState, ThemeMode } from '../game/types';
 import { renderGame } from '../game/renderer';
-import { updatePhysics } from '../game/physics';
+import { updatePhysics, sampleShakeOffset } from '../game/physics';
+import { PERF } from '../game/perf';
 
 interface GameCanvasProps {
   worldState: PhysicsWorldState;
@@ -10,7 +11,6 @@ interface GameCanvasProps {
   theme: ThemeMode;
   onRotateStep: (delta: number) => void;
   onNudgeBall: () => void;
-  continuous: boolean;
 }
 
 export const GameCanvas: React.FC<GameCanvasProps> = ({
@@ -58,12 +58,13 @@ export const GameCanvas: React.FC<GameCanvasProps> = ({
       while (diff > Math.PI) diff -= Math.PI * 2;
       visualRotationRef.current += diff * (1 - Math.exp(-dt * 14));
 
-      // 3. Render Canvas
-      const width = canvas.width / (window.devicePixelRatio || 1);
-      const height = canvas.height / (window.devicePixelRatio || 1);
+      // 3. Render Canvas (DPR capped by perf tier to protect fill-rate)
+      const dpr = Math.min(window.devicePixelRatio || 1, PERF.maxDpr);
+      const width = canvas.width / dpr;
+      const height = canvas.height / dpr;
 
       ctx.save();
-      ctx.scale(window.devicePixelRatio || 1, window.devicePixelRatio || 1);
+      ctx.scale(dpr, dpr);
 
       renderGame(
         {
@@ -71,7 +72,8 @@ export const GameCanvas: React.FC<GameCanvasProps> = ({
           width,
           height,
           theme,
-          visualRotation: visualRotationRef.current
+          visualRotation: visualRotationRef.current,
+          ...sampleShakeOffset(worldState.shake)
         },
         worldState,
         arenaWidth,
@@ -100,7 +102,7 @@ export const GameCanvas: React.FC<GameCanvasProps> = ({
       const parent = canvas.parentElement;
       if (!parent) return;
 
-      const dpr = window.devicePixelRatio || 1;
+      const dpr = Math.min(window.devicePixelRatio || 1, PERF.maxDpr);
       const width = parent.clientWidth;
       const height = parent.clientHeight;
 

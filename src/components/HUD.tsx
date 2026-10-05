@@ -8,8 +8,12 @@ import {
   Moon,
   HelpCircle,
   FlaskConical,
+  Wrench,
   Star,
-  Download
+  Download,
+  Vibrate,
+  VibrateOff,
+  Eraser
 } from 'lucide-react';
 import { LevelConfig, ThemeMode } from '../game/types';
 
@@ -20,12 +24,16 @@ interface HUDProps {
   elapsedTime: number;
   theme: ThemeMode;
   isMuted: boolean;
+  isShakeOn: boolean;
   onToggleTheme: () => void;
   onToggleMute: () => void;
+  onToggleShake: () => void;
   onResetLevel: () => void;
   onOpenLevelSelect: () => void;
   onOpenSandbox: () => void;
+  onOpenEditor: () => void;
   onOpenGuide: () => void;
+  onOpenCachePurge: () => void;
 }
 
 export const HUD: React.FC<HUDProps> = ({
@@ -35,12 +43,16 @@ export const HUD: React.FC<HUDProps> = ({
   elapsedTime,
   theme,
   isMuted,
+  isShakeOn,
   onToggleTheme,
   onToggleMute,
+  onToggleShake,
   onResetLevel,
   onOpenLevelSelect,
   onOpenSandbox,
-  onOpenGuide
+  onOpenEditor,
+  onOpenGuide,
+  onOpenCachePurge
 }) => {
   const isDark = theme === 'dark';
 
@@ -116,6 +128,15 @@ export const HUD: React.FC<HUDProps> = ({
           <FlaskConical className="w-4 h-4 text-purple-400" />
         </button>
 
+        {/* Level Editor */}
+        <button
+          onClick={onOpenEditor}
+          className="p-2 rounded-lg text-stone-400 hover:text-stone-100 dark:hover:text-stone-100 light:hover:text-stone-900 hover:bg-stone-800/60 dark:hover:bg-stone-800/80 light:hover:bg-stone-100 transition-colors"
+          title="关卡编辑器 · 设计你自己的几何迷宫"
+        >
+          <Wrench className="w-4 h-4 text-emerald-400" />
+        </button>
+
         {/* Level Select */}
         <button
           onClick={onOpenLevelSelect}
@@ -143,6 +164,15 @@ export const HUD: React.FC<HUDProps> = ({
           {isMuted ? <VolumeX className="w-4 h-4 text-red-400" /> : <Volume2 className="w-4 h-4 text-sky-400" />}
         </button>
 
+        {/* Camera Shake Toggle */}
+        <button
+          onClick={onToggleShake}
+          className="p-2 rounded-lg text-stone-400 hover:text-stone-100 dark:hover:text-stone-100 light:hover:text-stone-900 hover:bg-stone-800/60 dark:hover:bg-stone-800/80 light:hover:bg-stone-100 transition-colors"
+          title={isShakeOn ? '关闭打击震感（相机震动）' : '开启打击震感（相机震动）'}
+        >
+          {isShakeOn ? <Vibrate className="w-4 h-4 text-rose-400" /> : <VibrateOff className="w-4 h-4 text-stone-500" />}
+        </button>
+
         {/* Theme Toggle */}
         <button
           onClick={onToggleTheme}
@@ -161,6 +191,16 @@ export const HUD: React.FC<HUDProps> = ({
         >
           <Download className="w-4 h-4 text-emerald-400" />
         </a>
+
+        {/* Thorough cache purge */}
+        <button
+          onClick={onOpenCachePurge}
+          aria-label="清除缓存"
+          className="p-2 rounded-lg text-stone-400 hover:text-stone-100 dark:hover:text-stone-100 light:hover:text-stone-900 hover:bg-stone-800/60 dark:hover:bg-stone-800/80 light:hover:bg-stone-100 transition-colors"
+          title="彻底清除缓存（进度/关卡库/教学记录/浏览器缓存）"
+        >
+          <Eraser className="w-4 h-4 text-rose-300" />
+        </button>
 
         {/* Guide / Instructions */}
         <button

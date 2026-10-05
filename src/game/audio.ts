@@ -401,6 +401,153 @@ class SoundEngine {
   }
 
   /**
+   * Springy launch twang for bumper pads
+   */
+  public playBumper() {
+    if (this.isMuted) return;
+    this.initContext();
+    if (!this.ctx || !this.sfxGain) return;
+
+    const now = this.ctx.currentTime;
+    // Throttle to avoid substep spam
+    if (now - this.lastNoteTime < 0.08) return;
+    this.lastNoteTime = now;
+
+    // Springy pitch rise
+    const osc = this.ctx.createOscillator();
+    const gain = this.ctx.createGain();
+    osc.type = 'triangle';
+    osc.frequency.setValueAtTime(196, now);
+    osc.frequency.exponentialRampToValueAtTime(587.33, now + 0.09);
+    osc.frequency.exponentialRampToValueAtTime(392, now + 0.16);
+
+    gain.gain.setValueAtTime(0.2, now);
+    gain.gain.exponentialRampToValueAtTime(0.001, now + 0.22);
+
+    osc.connect(gain);
+    gain.connect(this.sfxGain);
+    osc.start(now);
+    osc.stop(now + 0.24);
+
+    // Soft low thump body
+    const thump = this.ctx.createOscillator();
+    const thumpGain = this.ctx.createGain();
+    thump.type = 'sine';
+    thump.frequency.setValueAtTime(120, now);
+    thump.frequency.exponentialRampToValueAtTime(60, now + 0.12);
+    thumpGain.gain.setValueAtTime(0.16, now);
+    thumpGain.gain.exponentialRampToValueAtTime(0.001, now + 0.14);
+    thump.connect(thumpGain);
+    thumpGain.connect(this.sfxGain);
+    thump.start(now);
+    thump.stop(now + 0.16);
+
+    if (typeof navigator !== 'undefined' && 'vibrate' in navigator) {
+      try {
+        navigator.vibrate(14);
+      } catch {
+        // Ignored
+      }
+    }
+  }
+
+  /**
+   * Splintering crack: fragile wall losing one hit point
+   */
+  public playCrack() {
+    if (this.isMuted) return;
+    this.initContext();
+    if (!this.ctx || !this.sfxGain) return;
+
+    const now = this.ctx.currentTime;
+    const osc = this.ctx.createOscillator();
+    const gain = this.ctx.createGain();
+    osc.type = 'square';
+    osc.frequency.setValueAtTime(240 + Math.random() * 60, now);
+    osc.frequency.exponentialRampToValueAtTime(70, now + 0.09);
+
+    gain.gain.setValueAtTime(0.11, now);
+    gain.gain.exponentialRampToValueAtTime(0.001, now + 0.11);
+
+    osc.connect(gain);
+    gain.connect(this.sfxGain);
+    osc.start(now);
+    osc.stop(now + 0.12);
+  }
+
+  /**
+   * Full structural collapse: fragile wall shattering
+   */
+  public playBreak() {
+    if (this.isMuted) return;
+    this.initContext();
+    if (!this.ctx || !this.sfxGain) return;
+
+    const now = this.ctx.currentTime;
+
+    // Deep collapse rumble
+    const rumble = this.ctx.createOscillator();
+    const rumbleGain = this.ctx.createGain();
+    rumble.type = 'sawtooth';
+    rumble.frequency.setValueAtTime(160, now);
+    rumble.frequency.exponentialRampToValueAtTime(38, now + 0.3);
+    rumbleGain.gain.setValueAtTime(0.2, now);
+    rumbleGain.gain.exponentialRampToValueAtTime(0.001, now + 0.34);
+    rumble.connect(rumbleGain);
+    rumbleGain.connect(this.sfxGain);
+    rumble.start(now);
+    rumble.stop(now + 0.36);
+
+    // Shattering shimmer cascade
+    const shimmer = this.ctx.createOscillator();
+    const shimmerGain = this.ctx.createGain();
+    shimmer.type = 'triangle';
+    shimmer.frequency.setValueAtTime(880, now);
+    shimmer.frequency.exponentialRampToValueAtTime(220, now + 0.22);
+    shimmerGain.gain.setValueAtTime(0.1, now);
+    shimmerGain.gain.exponentialRampToValueAtTime(0.001, now + 0.26);
+    shimmer.connect(shimmerGain);
+    shimmerGain.connect(this.sfxGain);
+    shimmer.start(now);
+    shimmer.stop(now + 0.28);
+
+    if (typeof navigator !== 'undefined' && 'vibrate' in navigator) {
+      try {
+        navigator.vibrate([20, 30, 40]);
+      } catch {
+        // Ignored
+      }
+    }
+  }
+
+  /**
+   * Soft mechanical click when a linked gate opens
+   */
+  public playPlate() {
+    if (this.isMuted) return;
+    this.initContext();
+    if (!this.ctx || !this.sfxGain) return;
+
+    const now = this.ctx.currentTime;
+    if (now - this.lastNoteTime < 0.15) return;
+    this.lastNoteTime = now;
+
+    const osc = this.ctx.createOscillator();
+    const gain = this.ctx.createGain();
+    osc.type = 'sine';
+    osc.frequency.setValueAtTime(523.25, now);
+    osc.frequency.setValueAtTime(659.26, now + 0.06);
+
+    gain.gain.setValueAtTime(0.1, now);
+    gain.gain.exponentialRampToValueAtTime(0.001, now + 0.2);
+
+    osc.connect(gain);
+    gain.connect(this.sfxGain);
+    osc.start(now);
+    osc.stop(now + 0.22);
+  }
+
+  /**
    * Triumphant level victory chord (Eb Major / Lydian celestial chord)
    */
   public playVictory() {

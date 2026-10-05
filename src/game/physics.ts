@@ -1,28 +1,69 @@
 import { sound } from './audio';
+import { PERF } from './perf';
 import {
   AnyObstacle,
   Ball,
-  ExitGate,
+  BumperObstacle,
+  CameraShake,
+  CardinalDirection,
+  FragileWallObstacle,
   LaserEmitterObstacle,
   LaserRay,
+  LevelConfig,
+  LinkedGateObstacle,
+  MirrorObstacle,
+  ObstacleType,
+  OneWayGateObstacle,
   Particle,
   PhaseBarrierObstacle,
+  PhysicsParams,
+  PhysicsWorldState,
   PortalObstacle,
-  RippleEffect,
+  PressurePlateObstacle,
   SlidingBlockObstacle,
   StarItem,
-  Vector2D,
-  PhysicsWorldState
+  Vector2D
 } from './types';
 
 export type { PhysicsWorldState };
 
-// Constants
+// ---------------------------------------------------------------------------
+// Base physics constants (defaults for PhysicsParams resolution)
+// ---------------------------------------------------------------------------
 export const BALL_RADIUS = 14;
 export const GRAVITY_MAGNITUDE = 1200; // px/s^2
 export const MAX_VELOCITY = 1500;
 export const RESTITUTION = 0.45; // Bounciness
 export const FRICTION = 0.988; // Air/surface damping
+
+export const DEFAULT_PHYSICS_PARAMS: PhysicsParams = {
+  gravityScale: 1,
+  restitution: RESTITUTION,
+  friction: FRICTION,
+  maxVelocity: MAX_VELOCITY
+};
+
+/** Seconds the death explosion plays before the ball respawns. */
+const DEATH_RESPAWN_DELAY = 0.9;
+
+/**
+ * Resolve the runtime physics parameter set:
+ * sandbox overrides > per-level config > engine defaults.
+ */
+export function resolvePhysicsParams(
+  levelParams?: Partial<PhysicsParams> | null,
+  overrides?: Partial<PhysicsParams> | null
+): PhysicsParams {
+  return {
+    gravityScale:
+      overrides?.gravityScale ?? levelParams?.gravityScale ?? DEFAULT_PHYSICS_PARAMS.gravityScale,
+    restitution:
+      overrides?.restitution ?? levelParams?.restitution ?? DEFAULT_PHYSICS_PARAMS.restitution,
+    friction: overrides?.friction ?? levelParams?.friction ?? DEFAULT_PHYSICS_PARAMS.friction,
+    maxVelocity:
+      overrides?.maxVelocity ?? levelParams?.maxVelocity ?? DEFAULT_PHYSICS_PARAMS.maxVelocity
+  };
+}
 
 export function createInitialBall(start: Vector2D): Ball {
   return {
@@ -35,6 +76,69 @@ export function createInitialBall(start: Vector2D): Ball {
     isPhasing: false,
     dead: false,
     pulsePhase: 0
+  };
+}
+
+/**
+ * Build a fresh mutable world state from a level config.
+ * Single source of truth used by App on init / level switch / sandbox apply.
+ */
+export function createWorldState(
+  level: LevelConfig,
+  paramOverrides?: Partial<PhysicsParams>
+): PhysicsWorldState {
+  return {
+    ball: createInitialBall(level.ballStart),
+    obstacles: JSON.parse(JSON.stringify(level.obstacles)),
+    stars: JSON.parse(JSON.stringify(level.stars)),
+    exit: JSON.parse(JSON.stringify(level.exit)),
+    gravityAngle: 0,
+    targetAngle: 0,
+    particles: [],
+    ripples: [],
+    lasers: [],
+    portalCooldown: 0,
+    movesCount: 0,
+    elapsedTime: 0,
+    isWon: false,
+    status: 'playing',
+    deathTimer: 0,
+    ballStart: { x: level.ballStart.x, y: level.ballStart.y },
+    params: resolvePhysicsParams(level.physics, paramOverrides),
+    shake: { magnitude: 0, duration: 0, elapsed: 0 }
+  };
+}
+
+const DIRECTION_VECTORS: Record<CardinalDirection, Vector2D> = {
+  up: { x: 0, y: -1 },
+  down: { x: 0, y: 1 },
+  left: { x: -1, y: 0 },
+  right: { x: 1, y: 0 }
+};
+
+/**
+ * Fire a camera shake. Overlapping shakes do NOT stack — the stronger
+ * request wins (and refreshes the timer), so rapid multi-impacts stay
+ * punchy without turning into motion sickness soup.
+ */
+export function addShake(state: PhysicsWorldState, magnitude: number, duration: number): void {
+  const s = state.shake;
+  if (magnitude >= s.magnitude) {
+    s.magnitude = magnitude;
+    s.duration = duration;
+    s.elapsed = 0;
+  }
+}
+
+/** Current shake offset in px (0,0 when idle). Sampled once per frame by the renderer host. */
+export function sampleShakeOffset(shake: CameraShake): { x: number; y: number } {
+  const remain = shake.duration - shake.elapsed;
+  if (remain <= 0 || shake.magnitude <= 0 || PERF.shakeScale <= 0) return { x: 0, y: 0 };
+  // Ease-out envelope so the last frames settle instead of cutting off
+  const amp = shake.magnitude * (remain / shake.duration) * PERF.shakeScale;
+  return {
+    x: (Math.random() * 2 - 1) * amp,
+    y: (Math.random() * 2 - 1) * amp
   };
 }
 
@@ -120,6 +224,44 @@ function resolveCircleBoxCollision(
   return { x: cx, y: cy, vx, vy, hit: false, impactSpeed: 0 };
 }
 
+/** Simple circle-AABB overlap probe (sensor zones, plates, bumpers). */
+function circleBoxOverlap(
+  cx: number, cy: number, r: number,
+  bx: number, by: number, bw: number, bh: number
+): boolean {
+  const closestX = Math.max(bx, Math.min(cx, bx + bw));
+  const closestY = Math.max(by, Math.min(cy, by + bh));
+  const dx = cx - closestX;
+  const dy = cy - closestY;
+  return dx * dx + dy * dy < r * r;
+}
+
+/** Standard solid-wall resolution against the ball, applying result in place. */
+function collideBallAsWall(
+  state: PhysicsWorldState,
+  bx: number, by: number, bw: number, bh: number,
+  restitution: number,
+  playSound = true
+): { hit: boolean; impactSpeed: number } {
+  const col = resolveCircleBoxCollision(
+    state.ball.x, state.ball.y, state.ball.radius,
+    state.ball.vx, state.ball.vy,
+    bx, by, bw, bh,
+    restitution
+  );
+  if (col.hit) {
+    state.ball.x = col.x;
+    state.ball.y = col.y;
+    state.ball.vx = col.vx;
+    state.ball.vy = col.vy;
+    if (playSound && col.impactSpeed > 25) {
+      sound.playImpact(col.impactSpeed);
+      spawnImpactParticles(state, state.ball.x, state.ball.y, 4);
+    }
+  }
+  return col;
+}
+
 /**
  * Segment intersection test for lasers
  */
@@ -189,8 +331,458 @@ function distToSegment(px: number, py: number, x1: number, y1: number, x2: numbe
   return Math.hypot(px - (x1 + t * (x2 - x1)), py - (y1 + t * (y2 - y1)));
 }
 
+// ---------------------------------------------------------------------------
+// Obstacle behavior registry
+// ---------------------------------------------------------------------------
+// Each obstacle type registers one per-substep interaction handler. Adding a
+// new mechanism = adding a new entry here + a renderer entry + (optional) UI
+// tool. No more scattered if-else chains.
+
+interface BehaviorContext {
+  subDt: number;
+  gx: number;
+  gy: number;
+  arenaWidth: number;
+  arenaHeight: number;
+  phasing: boolean; // shared flag: ball is inside a permeable volume this substep
+}
+
+type ObstacleBehavior = (state: PhysicsWorldState, obs: AnyObstacle, bctx: BehaviorContext) => void;
+
+const OBSTACLE_BEHAVIORS: Partial<Record<ObstacleType, ObstacleBehavior>> = {
+  wall: (state, obs) => {
+    collideBallAsWall(state, obs.x, obs.y, obs.width, obs.height, state.params.restitution);
+  },
+
+  // NOTE: sliding-block *kinetics* run in the pre-integration pass below;
+  // this entry only handles the ball <-> block collision response.
+  sliding_block: (state, obs) => {
+    const sb = obs as SlidingBlockObstacle;
+    const col = resolveCircleBoxCollision(
+      state.ball.x, state.ball.y, state.ball.radius,
+      state.ball.vx - sb.vx, state.ball.vy - sb.vy,
+      sb.x, sb.y, sb.width, sb.height,
+      state.params.restitution
+    );
+    if (col.hit) {
+      state.ball.x = col.x;
+      state.ball.y = col.y;
+      state.ball.vx = col.vx + sb.vx;
+      state.ball.vy = col.vy + sb.vy;
+      // Transfer momentum to block
+      sb.vx += (state.ball.vx * 0.15);
+      sb.vy += (state.ball.vy * 0.15);
+      if (col.impactSpeed > 30) {
+        sound.playImpact(col.impactSpeed);
+      }
+    }
+  },
+
+  phase_barrier: (state, obs, bctx) => {
+    const pb = obs as PhaseBarrierObstacle;
+    const isSolid = isPhaseBarrierSolid(pb, state.gravityAngle);
+
+    if (isSolid) {
+      const col = resolveCircleBoxCollision(
+        state.ball.x, state.ball.y, state.ball.radius,
+        state.ball.vx, state.ball.vy,
+        pb.x, pb.y, pb.width, pb.height,
+        state.params.restitution * 0.8
+      );
+      if (col.hit) {
+        state.ball.x = col.x;
+        state.ball.y = col.y;
+        state.ball.vx = col.vx;
+        state.ball.vy = col.vy;
+        if (col.impactSpeed > 30) {
+          sound.playImpact(col.impactSpeed);
+        }
+      }
+    } else if (circleBoxOverlap(
+      state.ball.x, state.ball.y, state.ball.radius,
+      pb.x, pb.y, pb.width, pb.height
+    )) {
+      bctx.phasing = true;
+      if (!state.ball.isPhasing) {
+        sound.playPhasePass();
+      }
+    }
+  },
+
+  portal: (state, obs) => {
+    if (state.portalCooldown > 0) return;
+    const port = obs as PortalObstacle;
+    const pCenterX = port.x + port.width / 2;
+    const pCenterY = port.y + port.height / 2;
+    const dist = Math.hypot(state.ball.x - pCenterX, state.ball.y - pCenterY);
+
+    if (dist < (port.radius || 24)) {
+      // Find target portal
+      const target = state.obstacles.find(
+        o => o.id === port.targetPortalId && o.type === 'portal'
+      ) as PortalObstacle | undefined;
+      if (target) {
+        const targetCenterX = target.x + target.width / 2;
+        const targetCenterY = target.y + target.height / 2;
+
+        state.ball.x = targetCenterX;
+        state.ball.y = targetCenterY;
+        state.portalCooldown = 0.45; // prevent immediate re-entry
+
+        // Momentum redirection: rotate exit velocity by outAngleOffset (radians)
+        if (port.outAngleOffset) {
+          const cos = Math.cos(port.outAngleOffset);
+          const sin = Math.sin(port.outAngleOffset);
+          const nvx = state.ball.vx * cos - state.ball.vy * sin;
+          const nvy = state.ball.vx * sin + state.ball.vy * cos;
+          state.ball.vx = nvx;
+          state.ball.vy = nvy;
+        }
+
+        sound.playPortal();
+        state.ripples.push({
+          x: targetCenterX,
+          y: targetCenterY,
+          radius: 4,
+          maxRadius: 48,
+          alpha: 1,
+          color: 'rgba(192, 132, 252, 0.9)',
+          lineWidth: 2.5
+        });
+      }
+    }
+  },
+
+  hazard: (state, obs) => {
+    if (circleBoxOverlap(
+      state.ball.x, state.ball.y, state.ball.radius,
+      obs.x, obs.y, obs.width, obs.height
+    )) {
+      triggerDeath(state);
+    }
+  },
+
+  bumper: (state, obs) => {
+    const bp = obs as BumperObstacle;
+    const r = state.ball.radius;
+    if (!circleBoxOverlap(state.ball.x, state.ball.y, r, bp.x, bp.y, bp.width, bp.height)) return;
+
+    const dir = DIRECTION_VECTORS[bp.direction];
+    const strength = bp.strength || 900;
+    const perpX = -dir.y;
+    const perpY = dir.x;
+    const along = state.ball.vx * dir.x + state.ball.vy * dir.y;
+    const perp = (state.ball.vx * perpX + state.ball.vy * perpY) * 0.85;
+
+    // Launch: set along-axis speed to strength, dampen the perpendicular part
+    state.ball.vx = dir.x * strength + perpX * perp;
+    state.ball.vy = dir.y * strength + perpY * perp;
+
+    // Eject the ball to the pad edge along the boost direction to avoid sticking
+    if (bp.direction === 'up') state.ball.y = Math.min(state.ball.y, bp.y - r - 0.5);
+    else if (bp.direction === 'down') state.ball.y = Math.max(state.ball.y, bp.y + bp.height + r + 0.5);
+    else if (bp.direction === 'left') state.ball.x = Math.min(state.ball.x, bp.x - r - 0.5);
+    else state.ball.x = Math.max(state.ball.x, bp.x + bp.width + r + 0.5);
+
+    sound.playBumper();
+    addShake(state, 3, 0.16);
+
+    for (let i = 0; i < 8; i++) {
+      const spread = (Math.random() - 0.5) * 0.9;
+      const a = Math.atan2(dir.y, dir.x) + spread;
+      const sp = 60 + Math.random() * 120;
+      pushParticle(state, {
+        x: state.ball.x,
+        y: state.ball.y,
+        vx: Math.cos(a) * sp,
+        vy: Math.sin(a) * sp,
+        life: 0.3,
+        maxLife: 0.3,
+        size: 2.5,
+        color: 'rgba(52, 211, 153, 0.85)',
+        shape: 'circle'
+      });
+    }
+    state.ripples.push({
+      x: state.ball.x,
+      y: state.ball.y,
+      radius: 6,
+      maxRadius: 42,
+      alpha: 0.9,
+      color: 'rgba(52, 211, 153, 0.8)',
+      lineWidth: 2
+    });
+  },
+
+  one_way_gate: (state, obs, bctx) => {
+    const gate = obs as OneWayGateObstacle;
+    const dir = DIRECTION_VECTORS[gate.passDirection];
+    const tol = gate.tolerance ?? 30;
+    const along = state.ball.vx * dir.x + state.ball.vy * dir.y;
+
+    if (along > tol) {
+      // Moving through in the allowed direction: permeable
+      bctx.phasing = true;
+      return;
+    }
+    collideBallAsWall(state, gate.x, gate.y, gate.width, gate.height, state.params.restitution);
+  },
+
+  fragile_wall: (state, obs) => {
+    const fw = obs as FragileWallObstacle;
+    if (fw.broken) return;
+    if (!fw.maxHp) fw.maxHp = fw.hp;
+
+    const col = collideBallAsWall(
+      state, fw.x, fw.y, fw.width, fw.height,
+      state.params.restitution,
+      false // custom sound handling below
+    );
+    if (!col.hit) return;
+
+    const threshold = fw.impactThreshold ?? 220;
+    if (col.impactSpeed > threshold) {
+      fw.hp -= 1;
+      spawnDebrisParticles(state, fw, 6, false);
+      sound.playCrack();
+
+      if (fw.hp <= 0) {
+        fw.broken = true;
+        sound.playBreak();
+        addShake(state, 5, 0.28);
+        spawnDebrisParticles(state, fw, 22, true);
+        state.ripples.push({
+          x: fw.x + fw.width / 2,
+          y: fw.y + fw.height / 2,
+          radius: 8,
+          maxRadius: Math.max(fw.width, fw.height) * 0.9,
+          alpha: 1,
+          color: 'rgba(251, 191, 36, 0.9)',
+          lineWidth: 2.5
+        });
+      }
+    } else if (col.impactSpeed > 25) {
+      sound.playImpact(col.impactSpeed);
+    }
+  },
+
+  // pressure_plate state is driven by updateLinkages() pre-pass, no direct behavior
+  linked_gate: (state, obs) => {
+    const gate = obs as LinkedGateObstacle;
+    if (gate.open) return;
+    collideBallAsWall(state, gate.x, gate.y, gate.width, gate.height, state.params.restitution);
+  }
+};
+
 /**
- * Physics update loop with sub-stepping
+ * Pressure plate -> linked gate linkage resolution.
+ * Runs every substep before obstacle behaviors so gates react instantly.
+ * A plate is pressed while the ball overlaps it; latched plates stay pressed
+ * forever after first touch.
+ */
+function updateLinkages(state: PhysicsWorldState) {
+  const plates: PressurePlateObstacle[] = [];
+  for (const o of state.obstacles) {
+    if (o.type === 'pressure_plate') plates.push(o);
+  }
+  if (plates.length === 0) return;
+
+  for (const p of plates) {
+    if (p.pressed && p.latch) continue; // latched: stays pressed
+    p.pressed = circleBoxOverlap(
+      state.ball.x, state.ball.y, state.ball.radius,
+      p.x, p.y, p.width, p.height
+    );
+  }
+
+  for (const o of state.obstacles) {
+    if (o.type !== 'linked_gate') continue;
+    const gate = o as LinkedGateObstacle;
+    const wasOpen = gate.open;
+    gate.open = plates.some(pl => pl.pressed && pl.linkId === gate.id);
+    if (!wasOpen && gate.open) {
+      sound.playPlate();
+      state.ripples.push({
+        x: gate.x + gate.width / 2,
+        y: gate.y + gate.height / 2,
+        radius: 4,
+        maxRadius: 36,
+        alpha: 0.9,
+        color: 'rgba(167, 139, 250, 0.85)',
+        lineWidth: 2
+      });
+    }
+  }
+}
+
+/**
+ * Laser beam occluders: solid bodies block light.
+ */
+function occludesLaser(obs: AnyObstacle): boolean {
+  if (obs.type === 'wall' || obs.type === 'sliding_block') return true;
+  if (obs.type === 'fragile_wall') return !(obs as FragileWallObstacle).broken;
+  if (obs.type === 'linked_gate') return !(obs as LinkedGateObstacle).open;
+  return false;
+}
+
+// ---------------------------------------------------------------------------
+// Laser optics: free-angle emitters + mirror reflections
+// ---------------------------------------------------------------------------
+
+/** Resolve a laser emitter's beam direction (unit vector) from `angle` (deg)
+ *  or the legacy 4-way `direction` fallback. */
+export function emitterBeamDir(emitter: LaserEmitterObstacle): { dx: number; dy: number } {
+  if (typeof emitter.angle === 'number' && Number.isFinite(emitter.angle)) {
+    const rad = (emitter.angle * Math.PI) / 180;
+    return { dx: Math.cos(rad), dy: Math.sin(rad) };
+  }
+  switch (emitter.direction) {
+    case 'right': return { dx: 1, dy: 0 };
+    case 'left': return { dx: -1, dy: 0 };
+    case 'down': return { dx: 0, dy: 1 };
+    case 'up':
+    default: return { dx: 0, dy: -1 };
+  }
+}
+
+/** The reflective surface of a mirror: a line through the box center at
+ *  `angle` degrees, half-length = max(width, height) / 2. */
+export function mirrorSurfaceSegment(m: MirrorObstacle): {
+  x1: number; y1: number; x2: number; y2: number;
+} {
+  const cx = m.x + m.width / 2;
+  const cy = m.y + m.height / 2;
+  const half = Math.max(m.width, m.height) / 2;
+  const rad = (m.angle * Math.PI) / 180;
+  const dx = Math.cos(rad) * half;
+  const dy = Math.sin(rad) * half;
+  return { x1: cx - dx, y1: cy - dy, x2: cx + dx, y2: cy + dy };
+}
+
+/** Hard cap on folds per beam; prevents pathological mirror hailies. */
+const MAX_LASER_BOUNCES = 8;
+
+/**
+ * Cast all laser beams: free-angle emitters, solid occluders stop the ray,
+ * mirrors reflect it (angle of incidence = angle of reflection).
+ * Pure — shared by the physics loop and the editor's live beam preview.
+ */
+export function computeLaserSegments(
+  obstacles: AnyObstacle[],
+  arenaWidth: number,
+  arenaHeight: number
+): LaserRay[] {
+  const segments: LaserRay[] = [];
+
+  for (const obs of obstacles) {
+    if (obs.type !== 'laser_emitter') continue;
+    const emitter = obs as LaserEmitterObstacle;
+    if (!emitter.active) continue;
+
+    const originX = emitter.x + emitter.width / 2;
+    const originY = emitter.y + emitter.height / 2;
+    const start = emitterBeamDir(emitter);
+
+    let curX = originX;
+    let curY = originY;
+    let dirX = start.dx;
+    let dirY = start.dy;
+    let lastMirrorId: string | null = null;
+
+    for (let bounce = 0; bounce <= MAX_LASER_BOUNCES; bounce++) {
+      // Boundary exit via parametric clip (the origin always stays inside)
+      let tMax = Infinity;
+      if (dirX > 1e-9) tMax = Math.min(tMax, (arenaWidth - curX) / dirX);
+      else if (dirX < -1e-9) tMax = Math.min(tMax, -curX / dirX);
+      if (dirY > 1e-9) tMax = Math.min(tMax, (arenaHeight - curY) / dirY);
+      else if (dirY < -1e-9) tMax = Math.min(tMax, -curY / dirY);
+      if (!Number.isFinite(tMax) || tMax < 0) tMax = 0;
+
+      const farX = curX + dirX * tMax;
+      const farY = curY + dirY * tMax;
+
+      // Nearest hit among solid occluders and mirror surfaces
+      let bestDist = tMax;
+      let hitX = farX;
+      let hitY = farY;
+      let hitMirror: MirrorObstacle | null = null;
+
+      for (const target of obstacles) {
+        if (target.id === emitter.id) continue;
+        if (target.type === 'mirror') {
+          if (lastMirrorId && target.id === lastMirrorId) continue;
+          const seg = mirrorSurfaceSegment(target as MirrorObstacle);
+          const inter = getLineIntersection(curX, curY, farX, farY, seg.x1, seg.y1, seg.x2, seg.y2);
+          if (inter) {
+            const d = Math.hypot(inter.x - curX, inter.y - curY);
+            if (d > 1e-6 && d < bestDist) {
+              bestDist = d;
+              hitX = inter.x;
+              hitY = inter.y;
+              hitMirror = target as MirrorObstacle;
+            }
+          }
+        } else if (occludesLaser(target)) {
+          const hit = lineIntersectsRect(
+            curX, curY, farX, farY,
+            target.x, target.y, target.width, target.height
+          );
+          if (hit.hit && hit.dist > 1e-6 && hit.dist < bestDist) {
+            bestDist = hit.dist;
+            hitX = hit.x;
+            hitY = hit.y;
+            hitMirror = null;
+          }
+        }
+      }
+
+      segments.push({
+        startX: curX,
+        startY: curY,
+        endX: hitX,
+        endY: hitY,
+        active: true
+      });
+
+      if (!hitMirror || bounce === MAX_LASER_BOUNCES) break;
+
+      // Reflect about the mirror surface, then step off to avoid re-hitting.
+      // Half-silvered mirrors: only beams arriving from the silvered side
+      // reflect; beams from the glass side pass straight through.
+      const rad = (hitMirror.angle * Math.PI) / 180;
+      const nx = -Math.sin(rad);
+      const ny = Math.cos(rad);
+      const dot = dirX * nx + dirY * ny;
+      // dot < 0 → beam came from the +normal ("front") side, dot > 0 → back side
+      const arrivedFromFront = dot < 0;
+      const side = hitMirror.reflectSide ?? 'both';
+      const silveredSideMatch =
+        side === 'both' ||
+        (side === 'front' && arrivedFromFront) ||
+        (side === 'back' && !arrivedFromFront);
+
+      if (!silveredSideMatch) {
+        // Pass through: keep direction, advance just past the surface line
+        curX = hitX + dirX * 0.01;
+        curY = hitY + dirY * 0.01;
+        lastMirrorId = null;
+        continue;
+      }
+
+      dirX -= 2 * dot * nx;
+      dirY -= 2 * dot * ny;
+      curX = hitX + dirX * 0.01;
+      curY = hitY + dirY * 0.01;
+      lastMirrorId = hitMirror.id;
+    }
+  }
+
+  return segments;
+}
+
+/**
+ * Physics update loop with sub-stepping.
+ * Driven by the explicit status machine: playing / dying / won.
  */
 export function updatePhysics(
   state: PhysicsWorldState,
@@ -198,8 +790,24 @@ export function updatePhysics(
   arenaWidth: number,
   arenaHeight: number
 ): void {
-  if (state.ball.dead || state.isWon) return;
+  // Death explosion: let effects play, then respawn deterministically
+  if (state.status === 'dying') {
+    state.deathTimer += dt;
+    updateEffects(state, dt);
+    if (state.deathTimer >= DEATH_RESPAWN_DELAY) {
+      respawnBall(state);
+    }
+    return;
+  }
 
+  // Won: freeze simulation, keep ambient effects alive
+  if (state.status === 'won') {
+    updateEffects(state, dt);
+    state.ball.pulsePhase = (state.ball.pulsePhase + dt * 3) % (Math.PI * 2);
+    return;
+  }
+
+  const params = state.params;
   const subSteps = 4;
   const subDt = dt / subSteps;
 
@@ -213,11 +821,24 @@ export function updatePhysics(
   // PI/2: gravity right (x: +g, y: 0)
   // PI: gravity up (x: 0, y: -g)
   // 3*PI/2: gravity left (x: -g, y: 0)
-  const gx = GRAVITY_MAGNITUDE * Math.sin(state.gravityAngle);
-  const gy = GRAVITY_MAGNITUDE * Math.cos(state.gravityAngle);
+  const g = GRAVITY_MAGNITUDE * params.gravityScale;
+  const gx = g * Math.sin(state.gravityAngle);
+  const gy = g * Math.cos(state.gravityAngle);
+
+  const bctx: BehaviorContext = {
+    subDt,
+    gx,
+    gy,
+    arenaWidth,
+    arenaHeight,
+    phasing: false
+  };
 
   for (let step = 0; step < subSteps; step++) {
-    // 1. Update sliding blocks
+    // 0. Linkage pre-pass (pressure plates -> linked gates)
+    updateLinkages(state);
+
+    // 1. Kinetic obstacles: sliding blocks ride their rails
     for (const obs of state.obstacles) {
       if (obs.type === 'sliding_block') {
         const sb = obs as SlidingBlockObstacle;
@@ -237,67 +858,36 @@ export function updatePhysics(
       }
     }
 
-    // 2. Anti-gravity zones
-    for (const obs of state.obstacles) {
-      if (obs.type === 'anti_gravity') {
-        if (
-          state.ball.x >= obs.x &&
-          state.ball.x <= obs.x + obs.width &&
-          state.ball.y >= obs.y &&
-          state.ball.y <= obs.y + obs.height
-        ) {
-          // Counteract current gravity and push upward relative to gravity
-          const ag = obs as import('./types').AntiGravityObstacle;
-          state.ball.vx -= gx * (ag.force || 1.8) * subDt;
-          state.ball.vy -= gy * (ag.force || 1.8) * subDt;
-          // Spawn upward particles
-          if (Math.random() < 0.3) {
-            state.particles.push({
-              x: state.ball.x + (Math.random() - 0.5) * 16,
-              y: state.ball.y + (Math.random() - 0.5) * 16,
-              vx: -gx * 0.05 + (Math.random() - 0.5) * 40,
-              vy: -gy * 0.05 + (Math.random() - 0.5) * 40,
-              life: 0.3,
-              maxLife: 0.3,
-              size: 2.5,
-              color: 'rgba(56, 189, 248, 0.7)',
-              shape: 'circle'
-            });
-          }
-        }
-      }
-    }
-
-    // 3. Integrate Ball Velocity & Position
+    // 2. Integrate Ball Velocity & Position
     state.ball.vx += gx * subDt;
     state.ball.vy += gy * subDt;
 
     // Apply friction
-    state.ball.vx *= FRICTION;
-    state.ball.vy *= FRICTION;
+    state.ball.vx *= params.friction;
+    state.ball.vy *= params.friction;
 
     // Cap velocity
     const speed = Math.hypot(state.ball.vx, state.ball.vy);
-    if (speed > MAX_VELOCITY) {
-      state.ball.vx = (state.ball.vx / speed) * MAX_VELOCITY;
-      state.ball.vy = (state.ball.vy / speed) * MAX_VELOCITY;
+    if (speed > params.maxVelocity) {
+      state.ball.vx = (state.ball.vx / speed) * params.maxVelocity;
+      state.ball.vy = (state.ball.vy / speed) * params.maxVelocity;
     }
 
     state.ball.x += state.ball.vx * subDt;
     state.ball.y += state.ball.vy * subDt;
 
-    // 4. Arena Boundary Collisions
+    // 3. Arena Boundary Collisions
     if (state.ball.x - state.ball.radius < 0) {
       state.ball.x = state.ball.radius;
       if (state.ball.vx < 0) {
         sound.playImpact(Math.abs(state.ball.vx));
-        state.ball.vx = -state.ball.vx * RESTITUTION;
+        state.ball.vx = -state.ball.vx * params.restitution;
       }
     } else if (state.ball.x + state.ball.radius > arenaWidth) {
       state.ball.x = arenaWidth - state.ball.radius;
       if (state.ball.vx > 0) {
         sound.playImpact(Math.abs(state.ball.vx));
-        state.ball.vx = -state.ball.vx * RESTITUTION;
+        state.ball.vx = -state.ball.vx * params.restitution;
       }
     }
 
@@ -305,199 +895,44 @@ export function updatePhysics(
       state.ball.y = state.ball.radius;
       if (state.ball.vy < 0) {
         sound.playImpact(Math.abs(state.ball.vy));
-        state.ball.vy = -state.ball.vy * RESTITUTION;
+        state.ball.vy = -state.ball.vy * params.restitution;
       }
     } else if (state.ball.y + state.ball.radius > arenaHeight) {
       state.ball.y = arenaHeight - state.ball.radius;
       if (state.ball.vy > 0) {
         sound.playImpact(Math.abs(state.ball.vy));
-        state.ball.vy = -state.ball.vy * RESTITUTION;
+        state.ball.vy = -state.ball.vy * params.restitution;
       }
     }
 
-    // 5. Obstacle Collisions
-    let currentPhasing = false;
+    // 4. Obstacle interactions via behavior registry
+    bctx.phasing = false;
     for (const obs of state.obstacles) {
-      if (obs.type === 'wall') {
-        const col = resolveCircleBoxCollision(
-          state.ball.x, state.ball.y, state.ball.radius,
-          state.ball.vx, state.ball.vy,
-          obs.x, obs.y, obs.width, obs.height,
-          RESTITUTION
-        );
-        if (col.hit) {
-          state.ball.x = col.x;
-          state.ball.y = col.y;
-          state.ball.vx = col.vx;
-          state.ball.vy = col.vy;
-          if (col.impactSpeed > 25) {
-            sound.playImpact(col.impactSpeed);
-            spawnImpactParticles(state, state.ball.x, state.ball.y, 4);
-          }
-        }
-      } else if (obs.type === 'sliding_block') {
-        const sb = obs as SlidingBlockObstacle;
-        const col = resolveCircleBoxCollision(
-          state.ball.x, state.ball.y, state.ball.radius,
-          state.ball.vx - sb.vx, state.ball.vy - sb.vy,
-          sb.x, sb.y, sb.width, sb.height,
-          RESTITUTION
-        );
-        if (col.hit) {
-          state.ball.x = col.x;
-          state.ball.y = col.y;
-          state.ball.vx = col.vx + sb.vx;
-          state.ball.vy = col.vy + sb.vy;
-          // Transfer momentum to block
-          sb.vx += (state.ball.vx * 0.15);
-          sb.vy += (state.ball.vy * 0.15);
-          if (col.impactSpeed > 30) {
-            sound.playImpact(col.impactSpeed);
-          }
-        }
-      } else if (obs.type === 'phase_barrier') {
-        const pb = obs as PhaseBarrierObstacle;
-        const isSolid = isPhaseBarrierSolid(pb, state.gravityAngle);
-
-        if (isSolid) {
-          const col = resolveCircleBoxCollision(
-            state.ball.x, state.ball.y, state.ball.radius,
-            state.ball.vx, state.ball.vy,
-            pb.x, pb.y, pb.width, pb.height,
-            RESTITUTION * 0.8
-          );
-          if (col.hit) {
-            state.ball.x = col.x;
-            state.ball.y = col.y;
-            state.ball.vx = col.vx;
-            state.ball.vy = col.vy;
-            if (col.impactSpeed > 30) {
-              sound.playImpact(col.impactSpeed);
-            }
-          }
-        } else {
-          // Check if ball is inside or passing through permeable barrier
-          const inBarrier = (
-            state.ball.x >= pb.x - state.ball.radius &&
-            state.ball.x <= pb.x + pb.width + state.ball.radius &&
-            state.ball.y >= pb.y - state.ball.radius &&
-            state.ball.y <= pb.y + pb.height + state.ball.radius
-          );
-          if (inBarrier) {
-            currentPhasing = true;
-            if (!state.ball.isPhasing) {
-              sound.playPhasePass();
-            }
-          }
-        }
-      } else if (obs.type === 'portal' && state.portalCooldown <= 0) {
-        const port = obs as PortalObstacle;
-        const pCenterX = port.x + port.width / 2;
-        const pCenterY = port.y + port.height / 2;
-        const dist = Math.hypot(state.ball.x - pCenterX, state.ball.y - pCenterY);
-
-        if (dist < (port.radius || 24)) {
-          // Find target portal
-          const target = state.obstacles.find(o => o.id === port.targetPortalId && o.type === 'portal') as PortalObstacle;
-          if (target) {
-            const targetCenterX = target.x + target.width / 2;
-            const targetCenterY = target.y + target.height / 2;
-
-            state.ball.x = targetCenterX;
-            state.ball.y = targetCenterY;
-            state.portalCooldown = 0.45; // prevent immediate re-entry
-
-            sound.playPortal();
-            state.ripples.push({
-              x: targetCenterX,
-              y: targetCenterY,
-              radius: 4,
-              maxRadius: 48,
-              alpha: 1,
-              color: 'rgba(192, 132, 252, 0.9)',
-              lineWidth: 2.5
-            });
-          }
-        }
-      } else if (obs.type === 'hazard') {
-        const col = resolveCircleBoxCollision(
-          state.ball.x, state.ball.y, state.ball.radius,
-          state.ball.vx, state.ball.vy,
-          obs.x, obs.y, obs.width, obs.height,
-          0
-        );
-        if (col.hit) {
-          triggerDeath(state);
-          return;
-        }
-      }
+      if (state.status !== 'playing') return; // death may have been triggered mid-step
+      const behavior = OBSTACLE_BEHAVIORS[obs.type];
+      if (behavior) behavior(state, obs, bctx);
     }
-    state.ball.isPhasing = currentPhasing;
+    state.ball.isPhasing = bctx.phasing;
   }
 
-  // 6. Recalculate Laser Beams and Check Interceptions
-  state.lasers = [];
-  for (const obs of state.obstacles) {
-    if (obs.type === 'laser_emitter') {
-      const emitter = obs as LaserEmitterObstacle;
-      if (!emitter.active) continue;
+  // 5. Recalculate Laser Beams (multi-bounce optics) and Check Interceptions
+  state.lasers = computeLaserSegments(state.obstacles, arenaWidth, arenaHeight);
 
-      const originX = emitter.x + emitter.width / 2;
-      const originY = emitter.y + emitter.height / 2;
+  for (const laser of state.lasers) {
+    // Check if ball intersects this active laser segment
+    const ballDist = distToSegment(
+      state.ball.x, state.ball.y,
+      laser.startX, laser.startY,
+      laser.endX, laser.endY
+    );
 
-      let rayEndX = originX;
-      let rayEndY = originY;
-
-      const maxRayDist = Math.max(arenaWidth, arenaHeight);
-
-      if (emitter.direction === 'right') rayEndX = arenaWidth;
-      else if (emitter.direction === 'left') rayEndX = 0;
-      else if (emitter.direction === 'down') rayEndY = arenaHeight;
-      else if (emitter.direction === 'up') rayEndY = 0;
-
-      // Check occlusion by solid walls or sliding blocks
-      let closestX = rayEndX;
-      let closestY = rayEndY;
-      let minRayDist = Math.hypot(rayEndX - originX, rayEndY - originY);
-
-      for (const targetObs of state.obstacles) {
-        if (targetObs.id === emitter.id) continue;
-        if (targetObs.type === 'wall' || targetObs.type === 'sliding_block') {
-          const hit = lineIntersectsRect(
-            originX, originY, rayEndX, rayEndY,
-            targetObs.x, targetObs.y, targetObs.width, targetObs.height
-          );
-          if (hit.hit && hit.dist < minRayDist) {
-            minRayDist = hit.dist;
-            closestX = hit.x;
-            closestY = hit.y;
-          }
-        }
-      }
-
-      state.lasers.push({
-        startX: originX,
-        startY: originY,
-        endX: closestX,
-        endY: closestY,
-        active: true
-      });
-
-      // Check if ball intersects this active laser beam
-      const ballDist = distToSegment(
-        state.ball.x, state.ball.y,
-        originX, originY,
-        closestX, closestY
-      );
-
-      if (ballDist < state.ball.radius * 0.8) {
-        triggerDeath(state);
-        return;
-      }
+    if (ballDist < state.ball.radius * 0.8) {
+      triggerDeath(state);
+      return;
     }
   }
 
-  // 7. Check Star Collection
+  // 6. Check Star Collection
   for (const star of state.stars) {
     if (!star.collected) {
       const dist = Math.hypot(state.ball.x - star.x, state.ball.y - star.y);
@@ -527,11 +962,12 @@ export function updatePhysics(
     }
   }
 
-  // 8. Check Exit Monolith
+  // 7. Check Exit Monolith
   if (state.exit.unlocked) {
     const exitDist = Math.hypot(state.ball.x - state.exit.x, state.ball.y - state.exit.y);
     if (exitDist < state.ball.radius + state.exit.radius - 2) {
       state.isWon = true;
+      state.status = 'won';
       sound.playVictory();
       state.ripples.push({
         x: state.exit.x,
@@ -546,16 +982,22 @@ export function updatePhysics(
     }
   }
 
-  // 9. Update Trail
+  // 8. Update Trail
   state.ball.trail.push({ x: state.ball.x, y: state.ball.y, alpha: 0.6 });
-  if (state.ball.trail.length > 12) {
+  if (state.ball.trail.length > PERF.trailLength) {
     state.ball.trail.shift();
   }
   for (const t of state.ball.trail) {
     t.alpha *= 0.85;
   }
 
-  // 10. Update Particles & Ripples
+  // 9. Update Particles & Ripples
+  updateEffects(state, dt);
+
+  state.ball.pulsePhase = (state.ball.pulsePhase + dt * 3) % (Math.PI * 2);
+}
+
+function updateEffects(state: PhysicsWorldState, dt: number) {
   for (let i = state.particles.length - 1; i >= 0; i--) {
     const p = state.particles[i];
     p.life -= dt;
@@ -576,14 +1018,38 @@ export function updatePhysics(
     }
   }
 
-  state.ball.pulsePhase = (state.ball.pulsePhase + dt * 3) % (Math.PI * 2);
+  // Camera shake decay
+  if (state.shake.duration > 0) {
+    state.shake.elapsed += dt;
+    if (state.shake.elapsed >= state.shake.duration) {
+      state.shake.magnitude = 0;
+      state.shake.duration = 0;
+      state.shake.elapsed = 0;
+    }
+  }
+}
+
+/** Deterministic respawn owned by the physics loop (no external timers). */
+function respawnBall(state: PhysicsWorldState) {
+  state.ball = createInitialBall(state.ballStart);
+  state.status = 'playing';
+  state.deathTimer = 0;
+}
+
+/**
+ * Particle spawn funnel. Once the perf-tier cap is live, new spawns are
+ * dropped (oldest sparks are the ones already on screen — keep them).
+ */
+function pushParticle(state: PhysicsWorldState, p: Particle): void {
+  if (state.particles.length >= PERF.particleCap) return;
+  state.particles.push(p);
 }
 
 function spawnImpactParticles(state: PhysicsWorldState, x: number, y: number, count: number) {
   for (let i = 0; i < count; i++) {
     const angle = Math.random() * Math.PI * 2;
     const speed = 40 + Math.random() * 80;
-    state.particles.push({
+    pushParticle(state, {
       x,
       y,
       vx: Math.cos(angle) * speed,
@@ -601,7 +1067,7 @@ function spawnStarParticles(state: PhysicsWorldState, x: number, y: number) {
   for (let i = 0; i < 18; i++) {
     const angle = (i / 18) * Math.PI * 2;
     const speed = 70 + Math.random() * 90;
-    state.particles.push({
+    pushParticle(state, {
       x,
       y,
       vx: Math.cos(angle) * speed,
@@ -615,15 +1081,42 @@ function spawnStarParticles(state: PhysicsWorldState, x: number, y: number) {
   }
 }
 
+function spawnDebrisParticles(
+  state: PhysicsWorldState,
+  fw: FragileWallObstacle,
+  count: number,
+  big: boolean
+) {
+  for (let i = 0; i < count; i++) {
+    const angle = Math.random() * Math.PI * 2;
+    const speed = (big ? 90 : 40) + Math.random() * (big ? 170 : 80);
+    pushParticle(state, {
+      x: fw.x + Math.random() * fw.width,
+      y: fw.y + Math.random() * fw.height,
+      vx: Math.cos(angle) * speed,
+      vy: Math.sin(angle) * speed,
+      life: (big ? 0.5 : 0.3) + Math.random() * 0.3,
+      maxLife: big ? 0.8 : 0.6,
+      size: big ? 3.5 : 2.5,
+      color: big ? 'rgba(251, 191, 36, 0.95)' : 'rgba(251, 191, 36, 0.7)',
+      shape: 'square'
+    });
+  }
+}
+
 export function triggerDeath(state: PhysicsWorldState) {
+  if (state.status !== 'playing') return;
+  state.status = 'dying';
+  state.deathTimer = 0;
   state.ball.dead = true;
   sound.playLaserHit();
+  addShake(state, 7, 0.4);
 
   // Geometric explosion
   for (let i = 0; i < 24; i++) {
     const angle = (i / 24) * Math.PI * 2;
     const speed = 100 + Math.random() * 140;
-    state.particles.push({
+    pushParticle(state, {
       x: state.ball.x,
       y: state.ball.y,
       vx: Math.cos(angle) * speed,

@@ -2,6 +2,26 @@ export type ThemeMode = 'dark' | 'light';
 
 export type ControlMode = 'compass' | 'gyro' | 'swipe' | 'buttons';
 
+/**
+ * Explicit game state machine.
+ * playing: normal simulation
+ * dying: death explosion playing, respawn timer running (handled inside physics loop)
+ * won: level complete, only effects update
+ */
+export type GameStatus = 'playing' | 'dying' | 'won';
+
+/**
+ * Runtime-tunable physics constants.
+ * Resolved per-level from LevelConfig.physics with sandbox overrides on top,
+ * then stored in PhysicsWorldState so the engine never reads hard-coded globals.
+ */
+export interface PhysicsParams {
+  gravityScale: number;  // multiplier on base GRAVITY_MAGNITUDE
+  restitution: number;   // bounciness 0..1
+  friction: number;      // per-substep velocity damping
+  maxVelocity: number;   // px/s cap
+}
+
 export interface Vector2D {
   x: number;
   y: number;
@@ -49,7 +69,15 @@ export type ObstacleType =
   | 'portal' 
   | 'laser_emitter' 
   | 'anti_gravity' 
-  | 'hazard';
+  | 'hazard'
+  | 'bumper'
+  | 'one_way_gate'
+  | 'fragile_wall'
+  | 'pressure_plate'
+  | 'linked_gate'
+  | 'mirror';
+
+export type CardinalDirection = 'up' | 'down' | 'left' | 'right';
 
 export interface BaseObstacle {
   id: string;
@@ -96,6 +124,26 @@ export interface LaserEmitterObstacle extends BaseObstacle {
   type: 'laser_emitter';
   direction: 'up' | 'down' | 'left' | 'right';
   active: boolean;
+  /** Free-angle beam direction in degrees (0 = right, 90 = down, clockwise).
+   *  Overrides `direction` when defined; kept optional for legacy levels. */
+  angle?: number;
+}
+
+/**
+ * Reflective light element: bends laser beams according to the angle of incidence.
+ * The reflective surface is a line through the box center at `angle` degrees
+ * (0 = horizontal surface, 90 = vertical). Non-solid to the ball — light only.
+ *
+ * `reflectSide` turns the mirror into a half-silvered (one-way) mirror:
+ * the surface normal is n = (-sin(angle), cos(angle)); beams arriving from
+ * the +n side ("front") reflect when reflectSide is 'front', beams from the
+ * -n side ("back") reflect when it is 'back'. Beams from the non-silvered
+ * side pass straight through. Default 'both' reflects from either side.
+ */
+export interface MirrorObstacle extends BaseObstacle {
+  type: 'mirror';
+  angle: number;
+  reflectSide?: 'both' | 'front' | 'back';
 }
 
 export interface AntiGravityObstacle extends BaseObstacle {
@@ -108,6 +156,54 @@ export interface HazardObstacle extends BaseObstacle {
   type: 'hazard';
 }
 
+/** Directional launch pad: flings the ball along `direction` at `strength` px/s on contact. */
+export interface BumperObstacle extends BaseObstacle {
+  type: 'bumper';
+  direction: CardinalDirection; // fixed in arena space, unaffected by gravity rotation
+  strength: number;             // exit speed along direction (px/s)
+}
+
+/**
+ * Valve gate: solid unless the ball is moving along `passDirection`
+ * faster than `tolerance` px/s. Classic check-point / current mechanic.
+ */
+export interface OneWayGateObstacle extends BaseObstacle {
+  type: 'one_way_gate';
+  passDirection: CardinalDirection;
+  tolerance?: number; // min along-axis speed (px/s) to permeate, default 30
+}
+
+/**
+ * Breakable wall: each impact above `impactThreshold` px/s removes 1 hp.
+ * At hp <= 0 the wall shatters (broken = true) and stops colliding / occluding.
+ */
+export interface FragileWallObstacle extends BaseObstacle {
+  type: 'fragile_wall';
+  hp: number;
+  maxHp: number;
+  impactThreshold?: number; // default 220 px/s
+  broken?: boolean;
+  color?: string;
+}
+
+/**
+ * Sensor pad: `pressed` while the ball overlaps (or latched forever after first
+ * touch when `latch` is set). Drives linked gates that share its `linkId`.
+ */
+export interface PressurePlateObstacle extends BaseObstacle {
+  type: 'pressure_plate';
+  linkId: string;   // id of the LinkedGateObstacle this plate controls
+  latch?: boolean;  // once pressed, stays pressed
+  pressed?: boolean;
+}
+
+/** Door controlled by pressure plates: solid while closed, passable while open. */
+export interface LinkedGateObstacle extends BaseObstacle {
+  type: 'linked_gate';
+  open?: boolean;
+  color?: string;
+}
+
 export type AnyObstacle = 
   | WallObstacle 
   | PhaseBarrierObstacle 
@@ -115,7 +211,13 @@ export type AnyObstacle =
   | PortalObstacle 
   | LaserEmitterObstacle 
   | AntiGravityObstacle 
-  | HazardObstacle;
+  | HazardObstacle
+  | BumperObstacle
+  | OneWayGateObstacle
+  | FragileWallObstacle
+  | PressurePlateObstacle
+  | LinkedGateObstacle
+  | MirrorObstacle;
 
 export interface StarItem {
   id: string;
@@ -157,6 +259,9 @@ export interface LevelConfig {
   obstacles: AnyObstacle[];
   parRotations: number;
   parTime: number; // seconds
+  physics?: Partial<PhysicsParams>; // per-level physics overrides
+  /** Beginner coaching hints rendered in a collapsible on-level card (early campaign levels). */
+  hints?: string[];
 }
 
 export interface LevelProgress {
@@ -181,4 +286,17 @@ export interface PhysicsWorldState {
   movesCount: number;
   elapsedTime: number;
   isWon: boolean;
+  status: GameStatus;      // explicit state machine driving simulation & respawn
+  deathTimer: number;      // seconds since death explosion started
+  ballStart: Vector2D;     // respawn anchor, owned by the world state
+  params: PhysicsParams;   // resolved runtime physics parameters
+  /** Camera shake: decays over time, GameCanvas samples it for draw offset. */
+  shake: CameraShake;
+}
+
+/** Decaying impact camera shake (magnitude in px, duration in seconds). */
+export interface CameraShake {
+  magnitude: number;
+  duration: number;
+  elapsed: number;
 }

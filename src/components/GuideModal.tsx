@@ -1,17 +1,20 @@
 import React from 'react';
-import { X, RotateCw, Shield, Compass, Sparkles, Smartphone, Eye } from 'lucide-react';
+import { X, RotateCw, Shield, Compass, Sparkles, Smartphone, Eye, ChevronsUp, DoorOpen, BrickWall, Target, Slash, GraduationCap } from 'lucide-react';
 import { ThemeMode } from '../game/types';
 
 interface GuideModalProps {
   isOpen: boolean;
   onClose: () => void;
   theme: ThemeMode;
+  /** Re-run the first-launch onboarding walkthrough. */
+  onReplayTutorial?: () => void;
 }
 
 export const GuideModal: React.FC<GuideModalProps> = ({
   isOpen,
   onClose,
-  theme
+  theme,
+  onReplayTutorial
 }) => {
   if (!isOpen) return null;
   const isDark = theme === 'dark';
@@ -112,17 +115,85 @@ export const GuideModal: React.FC<GuideModalProps> = ({
             </div>
           </div>
 
+          {/* Section 5: New Mechanisms */}
+          <div className="flex gap-4">
+            <div className="p-2.5 rounded-xl bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 shrink-0 h-fit">
+              <ChevronsUp className="w-5 h-5" />
+            </div>
+            <div>
+              <h3 className="font-semibold text-stone-100 dark:text-stone-100 light:text-stone-900 text-base">
+                05. 弹力垫与碎裂墙
+              </h3>
+              <p className="mt-1 leading-relaxed text-stone-400 text-xs md:text-sm">
+                翠色弹力垫会将小球沿箭头方向高速弹射，是搭建空中弹射路径的核心。赭色碎裂墙拥有累计耐久，只有超过阈值的高速冲击才能击碎它——先蓄力，再撞击。
+              </p>
+            </div>
+          </div>
+
+          <div className="flex gap-4">
+            <div className="p-2.5 rounded-xl bg-violet-500/10 text-violet-400 border border-violet-500/20 shrink-0 h-fit">
+              <Target className="w-5 h-5" />
+            </div>
+            <div>
+              <h3 className="font-semibold text-stone-100 dark:text-stone-100 light:text-stone-900 text-base">
+                06. 压力板与联动闸门
+              </h3>
+              <p className="mt-1 leading-relaxed text-stone-400 text-xs md:text-sm">
+                紫色压力板感应小球重量，并实时联动相同编号的闸门：压下即开，离开即关。带菱形纹的锁存压力板一经触发将永久开启，善用它们解开多重大门。
+              </p>
+            </div>
+          </div>
+
+          <div className="flex gap-4">
+            <div className="p-2.5 rounded-xl bg-sky-500/10 text-sky-400 border border-sky-500/20 shrink-0 h-fit">
+              <DoorOpen className="w-5 h-5" />
+            </div>
+            <div>
+              <h3 className="font-semibold text-stone-100 dark:text-stone-100 light:text-stone-900 text-base">
+                07. 单向涡流闸门
+              </h3>
+              <p className="mt-1 leading-relaxed text-stone-400 text-xs md:text-sm">
+                单向闸门只允许小球沿箭头方向穿越，逆行时将凝固为实体。顺着涡流规划单向环路，漏摘的星核往往需要绕行另一条走廊。
+              </p>
+            </div>
+          </div>
+
+          <div className="flex gap-4">
+            <div className="p-2.5 rounded-xl bg-cyan-500/10 text-cyan-400 border border-cyan-500/20 shrink-0 h-fit">
+              <Slash className="w-5 h-5" />
+            </div>
+            <div>
+              <h3 className="font-semibold text-stone-100 dark:text-stone-100 light:text-stone-900 text-base">
+                08. 斜向激光与反射镜
+              </h3>
+              <p className="mt-1 leading-relaxed text-stone-400 text-xs md:text-sm">
+                发射器不再局限于四正向——可按任意角度发光。银色反射镜会将光束按入射角折返，一道激光可以在镜面间折叠出致命的折线走廊。半透镜只在一侧镀银：镀银侧照常折返光束，玻璃侧的光则径直穿过，画出截然不同的第二道光路。镜面对小球没有碰撞，但读懂光路才是生存法则。
+              </p>
+            </div>
+          </div>
+
         </div>
 
         {/* Footer button */}
-        <div className="mt-8 pt-5 border-t border-stone-800/60 dark:border-stone-800 light:border-stone-200 flex items-center justify-between">
-          <a
-            href="/geometric-traverse.zip"
-            download="geometric-traverse.zip"
-            className="flex items-center gap-1.5 py-2.5 px-4 rounded-xl font-medium text-xs text-stone-300 dark:text-stone-300 light:text-stone-700 border border-stone-700/60 hover:bg-stone-800 transition-colors"
-          >
-            <span>下载源码工程 (ZIP)</span>
-          </a>
+        <div className="mt-8 pt-5 border-t border-stone-800/60 dark:border-stone-800 light:border-stone-200 flex items-center justify-between gap-2 flex-wrap">
+          <div className="flex items-center gap-2 flex-wrap">
+            <a
+              href="/geometric-traverse.zip"
+              download="geometric-traverse.zip"
+              className="flex items-center gap-1.5 py-2.5 px-4 rounded-xl font-medium text-xs text-stone-300 dark:text-stone-300 light:text-stone-700 border border-stone-700/60 hover:bg-stone-800 transition-colors"
+            >
+              <span>下载源码工程 (ZIP)</span>
+            </a>
+            {onReplayTutorial && (
+              <button
+                onClick={onReplayTutorial}
+                className="flex items-center gap-1.5 py-2.5 px-4 rounded-xl font-medium text-xs text-cyan-300 light:text-cyan-700 border border-cyan-500/30 hover:bg-cyan-500/10 transition-colors"
+                title="重新打开首次进入时的分步新手引导"
+              >
+                <GraduationCap className="w-3.5 h-3.5" /> 重看新手引导
+              </button>
+            )}
+          </div>
 
           <button
             onClick={onClose}
