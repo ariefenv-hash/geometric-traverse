@@ -18,6 +18,7 @@ import {
   ThemeMode
 } from './types';
 import { emitterBeamDir, isPhaseBarrierSolid, mirrorSurfaceSegment } from './physics';
+import { CLASSIC_SKIN_ID, ensureSkinImagesLoaded, getSelectedSkinId, getSkinImage } from './skins';
 
 export interface RenderContext {
   ctx: CanvasRenderingContext2D;
@@ -1247,6 +1248,24 @@ function drawBall(
   ctx.beginPath();
   ctx.arc(0, 0, auraR, 0, Math.PI * 2);
   ctx.fill();
+
+  // 3.5 Skinned sphere sprite (showcase designs). Falls back to the classic
+  //     procedural star-core below while the sprite loads or when classic is
+  //     selected. Skin is cosmetic only — physics/radius untouched.
+  ensureSkinImagesLoaded();
+  const skinId = getSelectedSkinId();
+  const skinImg = skinId === CLASSIC_SKIN_ID ? null : getSkinImage(skinId);
+  if (skinImg) {
+    // Design circle sits at r≈90 within the 110 half-viewBox, so this size
+    // lands the visible skin edge at ≈1.02× ball radius.
+    const size = ball.radius * 2.5;
+    ctx.save();
+    ctx.rotate(state.elapsedTime * 0.35); // slow ceremonial spin
+    ctx.drawImage(skinImg, -size / 2, -size / 2, size, size);
+    ctx.restore();
+    ctx.restore();
+    return;
+  }
 
   // 4. Solid sphere core with soft bloom
   const speed = Math.hypot(ball.vx, ball.vy);

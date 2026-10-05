@@ -24,7 +24,8 @@ export const KNOWN_STORAGE_KEYS: StorageKeyInfo[] = [
   { key: 'geometrix_traverse_user_levels_v1', label: '我的关卡库（自制关卡与分享码草稿）' },
   { key: 'gt_tutorial_done_v1', label: '新手引导完成记录' },
   { key: 'gt_seen_mechanics_v1', label: '机关首见提示记录' },
-  { key: 'gt_shake_enabled_v1', label: '震感开关偏好' }
+  { key: 'gt_shake_enabled_v1', label: '震感开关偏好' },
+  { key: 'gt_ball_skin_v1', label: '星核皮肤偏好' }
 ];
 
 export interface StorageFootprint {

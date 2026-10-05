@@ -1,10 +1,12 @@
+/* 瘦长无衬线中文主字体（ZT 青雅体）— must stay the first statement of this file */
+@import url("https://fontsapi.zeoseven.com/2128/main/result.css");
 @import "tailwindcss";
 
 @layer base {
   :root {
     --font-display: 'Syne', sans-serif;
     --font-serif-title: 'Cinzel', serif;
-    --font-sans: 'Plus Jakarta Sans', system-ui, -apple-system, sans-serif;
+    --font-sans: 'ZT QingYaTi', 'Plus Jakarta Sans', system-ui, -apple-system, sans-serif;
     --font-mono: 'JetBrains Mono', monospace;
   }
 

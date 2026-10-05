@@ -13,7 +13,8 @@ import {
   Download,
   Vibrate,
   VibrateOff,
-  Eraser
+  Eraser,
+  Palette
 } from 'lucide-react';
 import { LevelConfig, ThemeMode } from '../game/types';
 
@@ -34,6 +35,7 @@ interface HUDProps {
   onOpenEditor: () => void;
   onOpenGuide: () => void;
   onOpenCachePurge: () => void;
+  onOpenSkinPicker: () => void;
 }
 
 export const HUD: React.FC<HUDProps> = ({
@@ -52,7 +54,8 @@ export const HUD: React.FC<HUDProps> = ({
   onOpenSandbox,
   onOpenEditor,
   onOpenGuide,
-  onOpenCachePurge
+  onOpenCachePurge,
+  onOpenSkinPicker
 }) => {
   const isDark = theme === 'dark';
 
@@ -191,6 +194,16 @@ export const HUD: React.FC<HUDProps> = ({
         >
           <Download className="w-4 h-4 text-emerald-400" />
         </a>
+
+        {/* Ball skin picker */}
+        <button
+          onClick={onOpenSkinPicker}
+          aria-label="星核皮肤"
+          className="p-2 rounded-lg text-stone-400 hover:text-stone-100 dark:hover:text-stone-100 light:hover:text-stone-900 hover:bg-stone-800/60 dark:hover:bg-stone-800/80 light:hover:bg-stone-100 transition-colors"
+          title="星核皮肤 · 十种几何拓扑构型"
+        >
+          <Palette className="w-4 h-4 text-sky-300" />
+        </button>
 
         {/* Thorough cache purge */}
         <button

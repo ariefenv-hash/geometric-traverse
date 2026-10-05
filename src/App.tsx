@@ -35,6 +35,7 @@ import { OnboardingModal } from './components/OnboardingModal';
 import { MechanismToast } from './components/MechanismToast';
 import { HintCard } from './components/HintCard';
 import { CachePurgeModal } from './components/CachePurgeModal';
+import { SkinPickerModal } from './components/SkinPickerModal';
 import type { ObstacleType } from './game/types';
 
 export default function App() {
@@ -53,6 +54,7 @@ export default function App() {
   const [isVictoryOpen, setIsVictoryOpen] = useState(false);
   const [isEditorOpen, setIsEditorOpen] = useState(false);
   const [isCachePurgeOpen, setIsCachePurgeOpen] = useState(false);
+  const [isSkinPickerOpen, setIsSkinPickerOpen] = useState(false);
 
   // Playtest: when set, the game runs a user-made level draft from the editor.
   // Progress persistence is suspended while playtesting.
@@ -393,7 +395,7 @@ export default function App() {
       if (['INPUT', 'TEXTAREA'].includes((e.target as HTMLElement)?.tagName)) return;
       if (
         isLevelSelectOpen || isGuideOpen || isSandboxOpen ||
-        isVictoryOpen || isEditorOpen || isCachePurgeOpen || showOnboarding
+        isVictoryOpen || isEditorOpen || isCachePurgeOpen || isSkinPickerOpen || showOnboarding
       ) return;
       handleReplay();
     };
@@ -401,7 +403,7 @@ export default function App() {
     return () => window.removeEventListener('keydown', onKey);
   }, [
     isLevelSelectOpen, isGuideOpen, isSandboxOpen,
-    isVictoryOpen, isEditorOpen, isCachePurgeOpen, showOnboarding, handleReplay
+    isVictoryOpen, isEditorOpen, isCachePurgeOpen, isSkinPickerOpen, showOnboarding, handleReplay
   ]);
 
   const handleApplySandbox = (customObs: AnyObstacle[], gravityScale: number, bounciness: number) => {
@@ -479,6 +481,7 @@ export default function App() {
         onOpenEditor={() => setIsEditorOpen(true)}
         onOpenGuide={() => setIsGuideOpen(true)}
         onOpenCachePurge={() => setIsCachePurgeOpen(true)}
+        onOpenSkinPicker={() => setIsSkinPickerOpen(true)}
       />
 
       {/* Main Interactive Game Arena */}
@@ -625,6 +628,13 @@ export default function App() {
       <CachePurgeModal
         isOpen={isCachePurgeOpen}
         onClose={() => setIsCachePurgeOpen(false)}
+        theme={theme}
+      />
+
+      {/* Ball skin picker */}
+      <SkinPickerModal
+        isOpen={isSkinPickerOpen}
+        onClose={() => setIsSkinPickerOpen(false)}
         theme={theme}
       />
 
