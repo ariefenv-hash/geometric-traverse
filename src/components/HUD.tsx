@@ -18,7 +18,8 @@ import {
   Skull,
   LifeBuoy,
   Gauge,
-  ShieldCheck
+  ShieldCheck,
+  CalendarDays
 } from 'lucide-react';
 import { LevelConfig, ThemeMode } from '../game/types';
 import { AssistPrefs } from '../game/settings';
@@ -40,6 +41,7 @@ interface HUDProps {
   onToggleShake: () => void;
   onResetLevel: () => void;
   onOpenLevelSelect: () => void;
+  onOpenDaily: () => void;
   onOpenSandbox: () => void;
   onOpenEditor: () => void;
   onOpenGuide: () => void;
@@ -64,6 +66,7 @@ export const HUD: React.FC<HUDProps> = ({
   onToggleShake,
   onResetLevel,
   onOpenLevelSelect,
+  onOpenDaily,
   onOpenSandbox,
   onOpenEditor,
   onOpenGuide,
@@ -275,6 +278,15 @@ export const HUD: React.FC<HUDProps> = ({
           title="选择关卡"
         >
           <Grid className="w-4 h-4" />
+        </button>
+
+        {/* Daily Challenge */}
+        <button
+          onClick={onOpenDaily}
+          className="p-2 rounded-lg text-stone-400 hover:text-stone-100 dark:hover:text-stone-100 light:hover:text-stone-900 hover:bg-stone-800/60 dark:hover:bg-stone-800/80 light:hover:bg-stone-100 transition-colors"
+          title="每日挑战 · 连闯三关攒连胜"
+        >
+          <CalendarDays className="w-4 h-4 text-amber-400" />
         </button>
 
         {/* Reset Level */}

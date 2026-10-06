@@ -52,6 +52,14 @@ import { MechanismToast } from './components/MechanismToast';
 import { HintCard } from './components/HintCard';
 import { CachePurgeModal } from './components/CachePurgeModal';
 import { SkinPickerModal } from './components/SkinPickerModal';
+import { DailyChallengeModal } from './components/DailyChallengeModal';
+import {
+  loadDailyState,
+  pickDailyLevels,
+  registerDailyComplete,
+  todayKey
+} from './game/daily';
+import type { DailyState } from './game/daily';
 import type { ObstacleType } from './game/types';
 import { TiltController } from './game/tilt';
 
@@ -79,6 +87,25 @@ export default function App() {
   const [playtestLevel, setPlaytestLevel] = useState<LevelConfig | null>(null);
   const [playtestOrigin, setPlaytestOrigin] = useState<'editor' | 'library'>('editor');
   const [playingUserKey, setPlayingUserKey] = useState<string | null>(null);
+
+  // Daily Challenge: when set, the current playtest slot runs the seeded daily
+  // levels consecutively; campaign progress persistence is suspended.
+  const [isDailyOpen, setIsDailyOpen] = useState(false);
+  const [dailyInfo, setDailyInfo] = useState<DailyState>(() => loadDailyState());
+  const [dailyRun, setDailyRun] = useState<{ levelIds: number[]; idx: number; ratings: PrismRating[] } | null>(null);
+  const dailyRunRef = useRef(dailyRun);
+  useEffect(() => {
+    dailyRunRef.current = dailyRun;
+  }, [dailyRun]);
+  const dailyInfoRef = useRef(dailyInfo);
+  useEffect(() => {
+    dailyInfoRef.current = dailyInfo;
+  }, [dailyInfo]);
+  // 当日三关配置（弹窗展示；startDaily 会用同一算法重新抽取，同日结果一致）
+  const dailyLevels = useMemo(
+    () => pickDailyLevels(todayKey()).map(id => LEVELS.find(l => l.id === id) ?? LEVELS[0]),
+    []
+  );
 
   // User level library (localStorage-backed), surfaced in the level select modal
   const [userLevels, setUserLevels] = useState<StoredUserLevel[]>(() => loadUserLevels());
@@ -237,6 +264,35 @@ export default function App() {
       // Handle Victory
       if (ws.isWon && !isVictoryOpen && !victoryHandledRef.current) {
         victoryHandledRef.current = true;
+
+        // Daily challenge run: rate the level, then advance or finish the
+        // streak — campaign progress stays untouched.
+        const run = dailyRunRef.current;
+        if (run) {
+          const assistOn = !!(ws.assist?.lowGravity || ws.assist?.safeHazards);
+          const deaths = ws.deathCount;
+          let r: PrismRating = deaths === 0 ? 'S' : deaths <= 3 ? 'A' : 'B';
+          if (assistOn && r === 'S') r = 'A';
+          const ratings = [...run.ratings, r];
+          if (run.idx < run.levelIds.length - 1) {
+            const nextId = run.levelIds[run.idx + 1];
+            const nextCfg = LEVELS.find(l => l.id === nextId) ?? LEVELS[0];
+            setDailyRun({ ...run, idx: run.idx + 1, ratings });
+            setPlaytestLevel(nextCfg);
+            initLevel(nextCfg);
+          } else {
+            const nextInfo = registerDailyComplete(todayKey(), ratings, dailyInfoRef.current);
+            setDailyInfo(nextInfo);
+            setDailyRun(null);
+            setPlaytestLevel(null);
+            setPlayingUserKey(null);
+            setIsVictoryOpen(false);
+            initLevel(LEVELS[currentLevelIndex] ?? LEVELS[0]);
+            setIsDailyOpen(true);
+          }
+          return;
+        }
+
         setIsVictoryOpen(true);
 
         // Playtesting user drafts never touches the official progress chain
@@ -497,6 +553,28 @@ export default function App() {
     }
   }, [playtestOrigin]);
 
+  // ---- 每日挑战 ----
+  const startDaily = useCallback(() => {
+    const ids = pickDailyLevels(todayKey());
+    const first = LEVELS.find(l => l.id === ids[0]) ?? LEVELS[0];
+    setIsDailyOpen(false);
+    setIsLevelSelectOpen(false);
+    setDailyRun({ levelIds: ids, idx: 0, ratings: [] });
+    setPlaytestLevel(first);
+    setPlaytestOrigin('library');
+    setPlayingUserKey(null);
+    setIsVictoryOpen(false);
+    initLevel(first);
+  }, [initLevel]);
+
+  const exitDaily = useCallback(() => {
+    setDailyRun(null);
+    setPlaytestLevel(null);
+    setPlayingUserKey(null);
+    setIsVictoryOpen(false);
+    initLevel(LEVELS[currentLevelIndex] ?? LEVELS[0]);
+  }, [currentLevelIndex, initLevel]);
+
   const handleDeleteUserLevel = useCallback((entry: StoredUserLevel) => {
     if (!window.confirm(`确定删除「${entry.name}」？此操作不可撤销。`)) return;
     const { list, ok } = deleteUserLevel(entry.id);
@@ -639,8 +717,9 @@ export default function App() {
         onToggleAssistSafe={() => setAssist(a => ({ ...a, safeHazards: !a.safeHazards }))}
         onResetLevel={handleReplay}
         onOpenLevelSelect={() => setIsLevelSelectOpen(true)}
-        onOpenSandbox={() => setIsSandboxOpen(true)}
-        onOpenEditor={() => setIsEditorOpen(true)}
+        onOpenDaily={() => setIsDailyOpen(true)}
+        onOpenSandbox={() => { if (dailyRunRef.current) exitDaily(); setIsSandboxOpen(true); }}
+        onOpenEditor={() => { if (dailyRunRef.current) exitDaily(); setIsEditorOpen(true); }}
         onOpenGuide={() => setIsGuideOpen(true)}
         onOpenCachePurge={() => setIsCachePurgeOpen(true)}
         onOpenSkinPicker={() => setIsSkinPickerOpen(true)}
@@ -686,7 +765,7 @@ export default function App() {
         )}
 
         {/* Playtest bar: editor roundtrip controls */}
-        {playtestLevel && (
+        {playtestLevel && !dailyRun && (
           <div className="absolute top-4 left-1/2 transform -translate-x-1/2 z-30 flex items-center gap-2 px-3 py-1.5 rounded-full bg-emerald-500/15 border border-emerald-500/40 backdrop-blur-md shadow-lg">
             <span className="text-xs font-medium text-emerald-300">
               试玩模式 · {playtestLevel.code} {playtestLevel.title}
@@ -696,6 +775,21 @@ export default function App() {
               className="px-2.5 py-0.5 rounded-full text-[11px] font-semibold text-stone-950 bg-emerald-400 hover:bg-emerald-300 transition-colors"
             >
               {playtestOrigin === 'library' ? '返回关卡库' : '返回编辑器'}
+            </button>
+          </div>
+        )}
+
+        {/* Daily challenge run banner (top center) */}
+        {dailyRun && (
+          <div className="absolute top-4 left-1/2 transform -translate-x-1/2 z-30 flex items-center gap-2 px-3 py-1.5 rounded-full bg-amber-500/15 border border-amber-500/40 backdrop-blur-md shadow-lg">
+            <span className="text-xs font-medium text-amber-300">
+              每日挑战 {dailyRun.idx + 1}/{dailyRun.levelIds.length}{dailyRun.ratings.length > 0 ? ` · ${dailyRun.ratings.join(' ')}` : ''}
+            </span>
+            <button
+              onClick={exitDaily}
+              className="px-2.5 py-0.5 rounded-full text-[11px] font-semibold text-stone-950 bg-amber-400 hover:bg-amber-300 transition-colors"
+            >
+              退出挑战
             </button>
           </div>
         )}
@@ -729,6 +823,7 @@ export default function App() {
         isOpen={isLevelSelectOpen}
         onClose={() => setIsLevelSelectOpen(false)}
         onSelectLevel={(id) => {
+          if (dailyRunRef.current) exitDaily();
           const idx = LEVELS.findIndex(l => l.id === id);
           if (idx !== -1) setCurrentLevelIndex(idx);
         }}
@@ -758,6 +853,19 @@ export default function App() {
         hasNextLevel={!playtestLevel && currentLevelIndex < LEVELS.length - 1}
         campaignStats={skinStats}
         theme={theme}
+      />
+
+      <DailyChallengeModal
+        isOpen={isDailyOpen}
+        onClose={() => setIsDailyOpen(false)}
+        theme={theme}
+        dateKey={todayKey()}
+        levels={dailyLevels}
+        todayRatings={dailyInfo.history[todayKey()] ?? null}
+        streak={dailyInfo.streak}
+        bestStreak={dailyInfo.bestStreak}
+        totalCompletes={dailyInfo.totalCompletes}
+        onStart={startDaily}
       />
 
       <GuideModal

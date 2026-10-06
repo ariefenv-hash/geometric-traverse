@@ -6,7 +6,7 @@
  *   - same-origin static assets: cache-first, then populate cache
  *   - everything else (cross-origin fonts, non-GET): untouched
  */
-const VERSION = 'gt-v1.4.0';
+const VERSION = 'gt-v1.5.0';
 const CACHE = `geometric-traverse-${VERSION}`;
 const CORE = ['./', './index.html', './manifest.webmanifest'];
 

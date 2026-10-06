@@ -28,7 +28,8 @@ export const KNOWN_STORAGE_KEYS: StorageKeyInfo[] = [
   { key: 'gt_ball_skin_v1', label: '星核皮肤偏好' },
   { key: 'gt_assist_v1', label: '辅助模式偏好（低重力 / 危险不致死）' },
   { key: 'gt_theme_v1', label: '主题偏好（虚空 / 白垩）' },
-  { key: 'gt_mute_v1', label: '静音偏好' }
+  { key: 'gt_mute_v1', label: '静音偏好' },
+  { key: 'gt_daily_v1', label: '每日挑战连胜与战绩' }
 ];
 
 export interface StorageFootprint {
